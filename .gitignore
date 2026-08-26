@@ -1,0 +1,10 @@
+﻿# Arduino / PlatformIO build artifacts
+.pio/
+build/
+*.bin
+*.elf
+*.map
+
+# IDE files
+.vscode/
+*.DS_Store
