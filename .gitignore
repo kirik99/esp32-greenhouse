@@ -1,4 +1,4 @@
-﻿# Arduino / PlatformIO build artifacts
+# Arduino / PlatformIO build artifacts
 .pio/
 build/
 *.bin
@@ -8,3 +8,22 @@ build/
 # IDE files
 .vscode/
 *.DS_Store
+
+# Wi-Fi credentials (never commit real passwords!)
+wifi_config.h
+**/wifi_config.h
+
+# Old / unorganized sketches (replaced by stage* folders)
+2d/
+2dCO2esp32-4.09.26/
+2dCO2esp32s3-4.09.26/
+camera_work/
+st4_DS18B20/
+
+# Arduino libraries (install via Arduino IDE Library Manager)
+libraries/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
