@@ -271,6 +271,15 @@
               </svg>
             </button>
           </div>
+
+          <!-- Gallery Strip & Counter -->
+          <div class="mt-4 pt-3 border-t border-white/[0.06]">
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span class="text-zinc-400">Архив в базе данных:</span>
+              <span id="photoCountBadge" class="font-mono text-emerald-400 font-semibold text-[11px]">Загрузка...</span>
+            </div>
+            <div id="photoGalleryStrip" class="flex gap-2 overflow-x-auto pb-1"></div>
+          </div>
         </div>
       </section>
     </div>
@@ -436,14 +445,40 @@
       const placeholder = document.getElementById('camPlaceholder');
       const meta = document.getElementById('camMeta');
 
-      const testImg = new Image();
-      testImg.src = 'http://' + host + ':3001/api/latest-image?t=' + Date.now();
-      testImg.onload = () => {
-        img.src = testImg.src;
-        img.classList.remove('hidden');
-        placeholder.classList.add('hidden');
-        meta.innerText = 'Кадр: ' + new Date().toLocaleTimeString();
-      };
+      fetch('http://' + host + ':3001/api/images')
+        .then(res => res.json())
+        .then(images => {
+          if (Array.isArray(images) && images.length > 0) {
+            const countBadge = document.getElementById('photoCountBadge');
+            if (countBadge) countBadge.innerText = images.length + ' фото сохранено';
+
+            const strip = document.getElementById('photoGalleryStrip');
+            if (strip) {
+              strip.innerHTML = '';
+              images.slice(0, 6).forEach((filename) => {
+                const thumb = document.createElement('img');
+                thumb.src = 'http://' + host + ':3001/api/images/' + filename;
+                thumb.title = filename;
+                thumb.className = 'w-14 h-11 object-cover rounded border border-white/10 hover:border-emerald-400 cursor-pointer transition flex-shrink-0';
+                thumb.onclick = () => {
+                  img.src = thumb.src;
+                  img.classList.remove('hidden');
+                  placeholder.classList.add('hidden');
+                  meta.innerText = 'Кадр: ' + filename;
+                };
+                strip.appendChild(thumb);
+              });
+            }
+
+            img.src = 'http://' + host + ':3001/api/latest-image?t=' + Date.now();
+            img.onload = () => {
+              img.classList.remove('hidden');
+              placeholder.classList.add('hidden');
+              meta.innerText = 'Кадр: ' + images[0];
+            };
+          }
+        })
+        .catch(err => console.warn('Gallery load error:', err));
     }
 
     // Auto-fetch latest photo on startup & every 60s
