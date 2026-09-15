@@ -313,7 +313,10 @@
 
     let relayStates = [false, false, false, false, false, false];
     const host = window.location.hostname || '192.168.139.36';
-    const wsUrl = 'ws://' + host + ':9001';
+    const isStandardPort = !window.location.port || window.location.port === '80' || window.location.port === '443';
+    const apiBase = isStandardPort ? '' : ('http://' + host + ':3001');
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = isStandardPort ? (wsProto + '//' + host + '/mqtt') : ('ws://' + host + ':9001');
 
     // Render Relays with Sleek Toggle UI
     const container = document.getElementById('relaysContainer');
@@ -429,7 +432,7 @@
         console.warn('MQTT publish error:', e);
       }
 
-      fetch('http://' + host + ':3001/api/capture', { method: 'POST' }).catch((err) => {
+      fetch(apiBase + '/api/capture', { method: 'POST' }).catch((err) => {
         console.warn('REST capture error:', err);
       });
 
@@ -445,7 +448,7 @@
       const placeholder = document.getElementById('camPlaceholder');
       const meta = document.getElementById('camMeta');
 
-      fetch('http://' + host + ':3001/api/images')
+      fetch(apiBase + '/api/images')
         .then(res => res.json())
         .then(images => {
           if (Array.isArray(images) && images.length > 0) {
@@ -457,7 +460,7 @@
               strip.innerHTML = '';
               images.slice(0, 6).forEach((filename) => {
                 const thumb = document.createElement('img');
-                thumb.src = 'http://' + host + ':3001/api/images/' + filename;
+                thumb.src = apiBase + '/api/images/' + filename;
                 thumb.title = filename;
                 thumb.className = 'w-14 h-11 object-cover rounded border border-white/10 hover:border-emerald-400 cursor-pointer transition flex-shrink-0';
                 thumb.onclick = () => {
@@ -470,7 +473,7 @@
               });
             }
 
-            img.src = 'http://' + host + ':3001/api/latest-image?t=' + Date.now();
+            img.src = apiBase + '/api/latest-image?t=' + Date.now();
             img.onload = () => {
               img.classList.remove('hidden');
               placeholder.classList.add('hidden');
