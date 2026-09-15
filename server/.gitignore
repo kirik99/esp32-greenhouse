@@ -1,0 +1,8 @@
+bridge/.env
+bridge/images/
+bridge/node_modules/
+dashboard/node_modules/
+influxdb_data/
+influxdb_config/
+mosquitto_data/
+mosquitto_log/

@@ -60,7 +60,7 @@ void setup() {
     logMsg("[ERR] PSRAM allocation failed!");
     return;
   }
-  logMsg("[OK] PSRAM buffers allocated (650KB each)");
+  logMsg("[OK] PSRAM buffers allocated successfully (650KB each)");
 
   usb = new USB_STREAM();
   usb->uvcCamRegisterCb(cameraFrameCallback, NULL);

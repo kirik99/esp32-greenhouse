@@ -27,3 +27,14 @@ libraries/
 __pycache__/
 *.pyc
 *.pyo
+
+# Server data, dependencies and secrets
+server/bridge/.env
+server/bridge/images/
+server/bridge/node_modules/
+server/dashboard/node_modules/
+server/dashboard/dist/
+server/mosquitto/data/
+server/mosquitto/log/
+server/influxdb_data/
+server/influxdb_config/

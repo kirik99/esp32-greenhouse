@@ -1,0 +1,17 @@
+{
+  "name": "growbox-bridge",
+  "version": "1.0.0",
+  "description": "Bridge service for Growbox IoT",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@influxdata/influxdb-client": "^1.33.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jpeg-js": "^0.4.4",
+    "mqtt": "^5.10.1"
+  }
+}
