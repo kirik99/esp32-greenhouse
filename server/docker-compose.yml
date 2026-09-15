@@ -42,6 +42,7 @@ services:
       - INFLUXDB_BUCKET=sensors
       - BRIDGE_PORT=3001
       - IMAGES_DIR=/app/images
+      - TZ=Europe/Moscow
     volumes:
       - ./bridge/images:/app/images
     depends_on:

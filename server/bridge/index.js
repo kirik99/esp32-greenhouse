@@ -130,8 +130,15 @@ mqttClient.on('message', async (topic, message) => {
       
       const rgbaBuffer = yuy2ToRgba(yuy2Buffer, width, height);
       
-      const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const filename = `${dateStr}.jpg`;
+      const pad = (n) => String(n).padStart(2, '0');
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = pad(now.getMonth() + 1);
+      const d = pad(now.getDate());
+      const hh = pad(now.getHours());
+      const mm = pad(now.getMinutes());
+      const ss = pad(now.getSeconds());
+      const filename = `${y}-${m}-${d}_${hh}-${mm}-${ss}.jpg`;
       const filepath = path.join(IMAGES_DIR, filename);
       
       const jpegData = jpeg.encode({
