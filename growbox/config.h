@@ -1,24 +1,24 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// BME280 Pins (I2C)
-#define PIN_SDA 6
-#define PIN_SCL 7
+// BME280 Pins (I2C on STEMMA QT connector: SDA=16, SCL=17)
+#define PIN_SDA 16
+#define PIN_SCL 17
 
-// DS18B20 Pin (OneWire)
-#define PIN_DS18B20 4
+// DS18B20 Pin (OneWire on A0 / GPIO 12, with 4.7k pullup to 3.3V)
+#define PIN_DS18B20 12
 
-// MH-Z19B Pins (UART2)
-#define PIN_MHZ19_RX 17
-#define PIN_MHZ19_TX 16
+// MH-Z19B Pins (Hardware UART: ESP32 RX=8 from Sensor TX, ESP32 TX=18 to Sensor RX)
+#define PIN_MHZ19_RX 8
+#define PIN_MHZ19_TX 18
 
-// Relays
-#define PIN_RELAY_1 1 // humidifier
-#define PIN_RELAY_2 2 // heater
-#define PIN_RELAY_3 3 // heater fan
-#define PIN_RELAY_4 8 // fan 1
-#define PIN_RELAY_5 9 // fan 2
-#define PIN_RELAY_6 10 // backlight
+// 6 Relays (LOW-active)
+#define PIN_RELAY_1 3   // Pin A1: Увлажнитель
+#define PIN_RELAY_2 9   // Pin A2: Нагреватель
+#define PIN_RELAY_3 10  // Pin A3: Вентилятор нагревателя
+#define PIN_RELAY_4 11  // Pin A4: Вентилятор 1 (приток/циркуляция)
+#define PIN_RELAY_5 2   // HUB75 CLK (Pin 13): Вентилятор 2 (вытяжка)
+#define PIN_RELAY_6 14  // HUB75 OE (Pin 15): Фитоподсветка
 
 // Intervals (ms)
 #define SENSOR_INTERVAL 30000
