@@ -113,6 +113,12 @@
 
     <!-- Connection & Telemetry Status Badge -->
     <div class="flex items-center gap-3 self-start sm:self-auto">
+      <!-- Authorization Lock Badge -->
+      <button id="authBadge" onclick="handleAuthClick()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] hover:border-white/20 text-xs transition cursor-pointer">
+        <span id="authIcon">🔒</span>
+        <span id="authText" class="font-medium text-zinc-400 font-mono text-[11px]">LOCKED</span>
+      </button>
+
       <div id="statusBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] text-xs">
         <div id="statusDot" class="w-2 h-2 rounded-full bg-amber-400 transition-colors duration-300"></div>
         <span id="statusText" class="font-medium text-zinc-300 font-mono text-[11px]">CONNECTING</span>
@@ -127,6 +133,41 @@
 
   <!-- Content Grid -->
   <main class="space-y-6 flex-1">
+
+    <!-- Emergency Alarm Banner (Hidden when normal) -->
+    <div id="alarmBanner" class="hidden p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between gap-3 text-rose-300 text-xs animate-pulse">
+      <div class="flex items-center gap-2.5">
+        <svg class="w-5 h-5 text-rose-400 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+        <div>
+          <span class="font-semibold uppercase tracking-wider text-rose-400" id="alarmTitle">АВАРИЙНАЯ ЗАЩИТА</span>:
+          <span id="alarmDesc">Отключение потребителей.</span>
+        </div>
+      </div>
+      <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 border border-rose-500/20 text-rose-300">ESP32 FAILSAFE</span>
+    </div>
+
+    <!-- Oyster Mushroom Cultivation Profile Bar (70L Container) -->
+    <div class="panel p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div class="space-y-1">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold tracking-wider text-zinc-200 uppercase">Профиль микроклимата: Вешенка (Контейнер 70л)</span>
+          <span id="activeStagePill" class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">ПЛОДОНОШЕНИЕ</span>
+        </div>
+        <p class="text-[11px] text-zinc-400 font-mono" id="stageTips">
+          Воздух: 14–18°C • Субстрат: 15–19°C • Влажность: 85–90% • CO₂ &lt; 900 ppm • Свет: 8–12ч (ВКЛ)
+        </p>
+      </div>
+      <div class="flex items-center gap-1.5 p-1 rounded-lg bg-zinc-900 border border-white/[0.06] text-xs font-medium self-start md:self-auto">
+        <button id="btnStageFruiting" onclick="selectStage('fruiting')" class="px-3 py-1 rounded-md bg-zinc-800 text-white border border-white/10 transition cursor-pointer">
+          Плодоношение
+        </button>
+        <button id="btnStageIncubation" onclick="selectStage('incubation')" class="px-3 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer">
+          Инкубация
+        </button>
+      </div>
+    </div>
 
     <!-- Section 1: Metrics (5 Sensors) -->
     <section>
@@ -374,6 +415,25 @@
         }
         else if (topic === 'growbox/status') {
           const s = JSON.parse(text);
+          if (s.alarm && s.alarm !== 'NONE') {
+            const banner = document.getElementById('alarmBanner');
+            const title = document.getElementById('alarmTitle');
+            const desc = document.getElementById('alarmDesc');
+            banner.classList.remove('hidden');
+            if (s.alarm === 'OVERHEAT_EMERGENCY') {
+              title.innerText = 'ОПАСНОСТЬ: ПЕРЕГРЕВ!';
+              desc.innerText = 'Сработала термозащита. Нагреватель отключён и заблокирован, вытяжка включена.';
+            } else if (s.alarm === 'OVERHUMIDITY_CUTOFF') {
+              title.innerText = 'ВНИМАНИЕ: ПЕРЕУВЛАЖНЕНИЕ (>= 98%)!';
+              desc.innerText = 'Увлажнитель отключён для предотвращения залива субстрата водой.';
+            } else if (s.alarm === 'SENSOR_DISCONNECTED') {
+              title.innerText = 'ВНИМАНИЕ: СБОЙ ДАТЧИКОВ!';
+              desc.innerText = 'Потерян сигнал с датчиков. Нагреватель отключён в целях безопасности.';
+            }
+          } else {
+            document.getElementById('alarmBanner').classList.add('hidden');
+          }
+
           if (Array.isArray(s.relays)) {
             relayStates = s.relays;
             relayStates.forEach((st, idx) => {
@@ -408,39 +468,153 @@
       }
     });
 
-    function toggleRelay(id) {
-      const currentState = relayStates[id - 1] || false;
-      const newState = !currentState;
-      // Optimistic UI update
-      const card = document.getElementById('relay-card-' + id);
-      if (newState) card.classList.add('relay-active');
-      else card.classList.remove('relay-active');
+    // Security & Auth (PIN 2212)
+    const ADMIN_PIN = '2212';
+    let isUnlocked = false;
+    let unlockExpiresAt = 0;
+    let pendingAction = null;
 
-      client.publish('growbox/relay/set', JSON.stringify({ relay: id, state: newState }));
+    function checkLockStatus() {
+      const authIcon = document.getElementById('authIcon');
+      const authText = document.getElementById('authText');
+      const authBadge = document.getElementById('authBadge');
+      
+      if (isUnlocked && Date.now() < unlockExpiresAt) {
+        const remainingSec = Math.round((unlockExpiresAt - Date.now()) / 1000);
+        const mins = Math.floor(remainingSec / 60);
+        const secs = remainingSec % 60;
+        authIcon.innerText = '🔓';
+        authText.innerText = 'UNLOCKED (' + mins + ':' + (secs < 10 ? '0' : '') + secs + ')';
+        authText.className = 'font-medium text-emerald-400 font-mono text-[11px]';
+        authBadge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-950/40 border border-emerald-500/30 text-xs transition cursor-pointer';
+      } else {
+        isUnlocked = false;
+        authIcon.innerText = '🔒';
+        authText.innerText = 'LOCKED';
+        authText.className = 'font-medium text-zinc-400 font-mono text-[11px]';
+        authBadge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] hover:border-white/20 text-xs transition cursor-pointer';
+      }
+    }
+    setInterval(checkLockStatus, 1000);
+
+    function handleAuthClick() {
+      if (isUnlocked) {
+        isUnlocked = false;
+        unlockExpiresAt = 0;
+        checkLockStatus();
+      } else {
+        openPinModal();
+      }
+    }
+
+    function openPinModal(action = null) {
+      pendingAction = action;
+      const modal = document.getElementById('pinModal');
+      const input = document.getElementById('pinInput');
+      const err = document.getElementById('pinError');
+      err.classList.add('hidden');
+      input.value = '';
+      modal.classList.remove('hidden');
+      setTimeout(() => input.focus(), 100);
+    }
+
+    function closePinModal() {
+      document.getElementById('pinModal').classList.add('hidden');
+      pendingAction = null;
+    }
+
+    function confirmPin() {
+      const input = document.getElementById('pinInput');
+      const err = document.getElementById('pinError');
+      if (input.value === ADMIN_PIN) {
+        isUnlocked = true;
+        unlockExpiresAt = Date.now() + 15 * 60 * 1000;
+        checkLockStatus();
+        closePinModal();
+        if (typeof pendingAction === 'function') {
+          const act = pendingAction;
+          pendingAction = null;
+          act();
+        }
+      } else {
+        err.classList.remove('hidden');
+        input.value = '';
+        input.focus();
+      }
+    }
+
+    function requireAuth(action) {
+      if (isUnlocked && Date.now() < unlockExpiresAt) {
+        action();
+      } else {
+        openPinModal(action);
+      }
+    }
+
+    // Oyster Mushroom Profile Selection
+    const PROFILES = {
+      fruiting: {
+        title: 'ПЛОДОНОШЕНИЕ',
+        tips: 'Воздух: 14–18°C • Субстрат: 15–19°C • Влажность: 85–90% • CO₂ < 900 ppm • Свет: 8–12ч (ВКЛ)'
+      },
+      incubation: {
+        title: 'ИНКУБАЦИЯ',
+        tips: 'Воздух: 20–24°C • Субстрат: 22–25°C • Влажность: 70–80% • CO₂ до 15000 ppm • Свет: 0 лк (ВЫКЛ)'
+      }
+    };
+
+    function selectStage(stage) {
+      const p = PROFILES[stage];
+      document.getElementById('activeStagePill').innerText = p.title;
+      document.getElementById('stageTips').innerText = p.tips;
+
+      const btnFruit = document.getElementById('btnStageFruiting');
+      const btnInc = document.getElementById('btnStageIncubation');
+
+      if (stage === 'fruiting') {
+        btnFruit.className = 'px-3 py-1 rounded-md bg-zinc-800 text-white border border-white/10 transition cursor-pointer';
+        btnInc.className = 'px-3 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer';
+      } else {
+        btnInc.className = 'px-3 py-1 rounded-md bg-zinc-800 text-white border border-white/10 transition cursor-pointer';
+        btnFruit.className = 'px-3 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer';
+      }
+    }
+
+    function toggleRelay(id) {
+      requireAuth(() => {
+        const currentState = relayStates[id - 1] || false;
+        const newState = !currentState;
+        const card = document.getElementById('relay-card-' + id);
+        if (newState) card.classList.add('relay-active');
+        else card.classList.remove('relay-active');
+
+        client.publish('growbox/relay/set', JSON.stringify({ relay: id, state: newState }));
+      });
     }
 
     function triggerSnapshot() {
-      const btn = document.getElementById('btnSnap');
-      const text = document.getElementById('btnSnapText');
-      btn.disabled = true;
-      text.innerText = 'Захват кадра...';
+      requireAuth(() => {
+        const btn = document.getElementById('btnSnap');
+        const text = document.getElementById('btnSnapText');
+        btn.disabled = true;
+        text.innerText = 'Захват кадра...';
 
-      // Send trigger via MQTT & REST fallback
-      try {
-        client.publish('growbox/camera/capture', '1');
-      } catch (e) {
-        console.warn('MQTT publish error:', e);
-      }
+        try {
+          client.publish('growbox/camera/capture', '1');
+        } catch (e) {
+          console.warn('MQTT publish error:', e);
+        }
 
-      fetch(apiBase + '/api/capture', { method: 'POST' }).catch((err) => {
-        console.warn('REST capture error:', err);
+        fetch(apiBase + '/api/capture', { method: 'POST' }).catch((err) => {
+          console.warn('REST capture error:', err);
+        });
+
+        setTimeout(() => {
+          loadLatestImage();
+          btn.disabled = false;
+          text.innerText = 'Сделать снимок сейчас';
+        }, 3500);
       });
-
-      setTimeout(() => {
-        loadLatestImage();
-        btn.disabled = false;
-        text.innerText = 'Сделать снимок сейчас';
-      }, 3500);
     }
 
     function loadLatestImage() {
@@ -488,5 +662,43 @@
     setTimeout(loadLatestImage, 1000);
     setInterval(loadLatestImage, 60000);
   </script>
+
+  <!-- PIN Authorization Modal -->
+  <div id="pinModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="panel p-6 max-w-sm w-full space-y-4 border-white/20 shadow-2xl animate-in fade-in zoom-in duration-200">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-white">Авторизация действия</h3>
+            <p class="text-[11px] text-zinc-400">Подтвердите управление гроубоксом</p>
+          </div>
+        </div>
+        <button onclick="closePinModal()" class="text-zinc-500 hover:text-white p-1 cursor-pointer">✕</button>
+      </div>
+
+      <div>
+        <label class="block text-xs text-zinc-400 mb-1.5 font-medium">Введите 4-значный PIN-код:</label>
+        <input type="password" id="pinInput" maxlength="4" inputmode="numeric" placeholder="••••" 
+          class="w-full py-3 px-4 rounded-xl bg-zinc-900 border border-white/10 text-center tracking-[0.6em] text-2xl font-mono text-white focus:outline-none focus:border-emerald-500 transition"
+          onkeydown="if(event.key === 'Enter') confirmPin()">
+        <p id="pinError" class="text-rose-400 text-xs font-mono mt-1.5 text-center hidden">Неверный PIN-код</p>
+      </div>
+
+      <div class="flex gap-2 pt-1">
+        <button onclick="closePinModal()" class="flex-1 py-2 px-3 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white text-xs font-medium border border-white/[0.08] transition cursor-pointer">
+          Отмена
+        </button>
+        <button onclick="confirmPin()" class="flex-1 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition cursor-pointer">
+          Подтвердить
+        </button>
+      </div>
+      <p class="text-[10px] text-zinc-500 text-center font-mono">Доступ открывается на 15 минут</p>
+    </div>
+  </div>
 </body>
 </html>

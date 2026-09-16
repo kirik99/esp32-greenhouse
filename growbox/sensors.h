@@ -5,11 +5,13 @@
 
 void setup_sensors();
 void read_sensors();
+void check_safety_failsafes();
 
 extern float current_air_temp;
 extern float current_humidity;
 extern float current_pressure;
 extern float current_substrate_temp;
 extern int current_co2_ppm;
+extern String current_alarm;
 
 #endif

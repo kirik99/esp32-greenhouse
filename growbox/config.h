@@ -25,6 +25,18 @@
 #define STATUS_INTERVAL 30000
 #define CAMERA_INTERVAL 600000
 
+// Safety & Emergency Failsafe Thresholds
+#define EMERGENCY_TEMP_AIR_MAX  50.0  // Emergency overheat cutoff (°C)
+#define EMERGENCY_TEMP_SUB_MAX  32.0  // Max safe substrate temp for oyster mycelium (°C)
+#define EMERGENCY_HUMIDITY_MAX  98.0  // Anti-flooding cutoff (%)
+#define SAFE_TEMP_RESTORE       35.0  // Temp below which heater lock can be cleared (°C)
+
+// MQTTS (TLS/SSL)
+#ifndef USE_MQTTS
+#define USE_MQTTS false
+#endif
+#define MQTTS_PORT 8883
+
 #define NUM_RELAYS 6
 extern const int relay_pins[NUM_RELAYS];
 

@@ -1,5 +1,6 @@
 #include "sensors.h"
 #include "config.h"
+#include "relay.h"
 #include <Wire.h>
 #include <Adafruit_BME280.h>
 #include <OneWire.h>
@@ -18,6 +19,7 @@ float current_humidity = -999.0;
 float current_pressure = -999.0;
 float current_substrate_temp = -999.0;
 int current_co2_ppm = -999;
+String current_alarm = "NONE";
 
 void setup_sensors() {
   Wire.begin(PIN_SDA, PIN_SCL);
@@ -87,4 +89,57 @@ void read_sensors() {
   
   Serial.printf("Sensors: Air=%.2fC, Hum=%.2f%%, Pres=%.2fhPa, Sub=%.2fC, CO2=%dppm\n", 
                 current_air_temp, current_humidity, current_pressure, current_substrate_temp, current_co2_ppm);
+
+  check_safety_failsafes();
 }
+
+void check_safety_failsafes() {
+  // 1. Overheat safety cutoff (Air temp >= 50°C or Substrate temp >= 32°C)
+  bool air_overheat = (current_air_temp != -999.0 && current_air_temp >= EMERGENCY_TEMP_AIR_MAX);
+  bool sub_overheat = (current_substrate_temp != -999.0 && current_substrate_temp >= EMERGENCY_TEMP_SUB_MAX);
+
+  if (air_overheat || sub_overheat) {
+    if (current_alarm != "OVERHEAT_EMERGENCY") {
+      current_alarm = "OVERHEAT_EMERGENCY";
+      emergency_cutoff(air_overheat ? "Air Temperature >= 50C!" : "Substrate Temperature >= 32C!");
+    }
+  } else if (is_heater_locked()) {
+    // Cooled down below safe restore threshold: release safety lock
+    bool air_safe = (current_air_temp == -999.0 || current_air_temp < SAFE_TEMP_RESTORE);
+    bool sub_safe = (current_substrate_temp == -999.0 || current_substrate_temp < SAFE_TEMP_RESTORE);
+    if (air_safe && sub_safe) {
+      lock_heater(false);
+      if (current_alarm == "OVERHEAT_EMERGENCY") {
+        current_alarm = "NONE";
+      }
+    }
+  }
+
+  // 2. Extreme Overhumidity cutoff (>= 98%)
+  if (current_humidity != -999.0 && current_humidity >= EMERGENCY_HUMIDITY_MAX) {
+    if (get_relay(1)) { // Humidifier is ON
+      set_relay(1, false);
+      Serial.println("[SAFETY ALERT] Humidifier cut OFF: Humidity >= 98%!");
+    }
+    if (current_alarm == "NONE") {
+      current_alarm = "OVERHUMIDITY_CUTOFF";
+    }
+  } else if (current_alarm == "OVERHUMIDITY_CUTOFF") {
+    current_alarm = "NONE";
+  }
+
+  // 3. Sensor disconnected / wire break protection
+  // If air temperature sensor failed, prevent heater from running blindly
+  if (current_air_temp < -100.0 && current_substrate_temp < -100.0) {
+    if (get_relay(2)) { // Heater is ON
+      set_relay(2, false);
+      Serial.println("[SAFETY ALERT] Heater cut OFF: Temperature sensors disconnected (-999)!");
+    }
+    if (current_alarm == "NONE") {
+      current_alarm = "SENSOR_DISCONNECTED";
+    }
+  } else if (current_alarm == "SENSOR_DISCONNECTED") {
+    current_alarm = "NONE";
+  }
+}
+

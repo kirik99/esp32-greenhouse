@@ -1,5 +1,6 @@
 #include "mqtt_client.h"
 #include "wifi_config.h"
+#include "config.h"
 #include "sensors.h"
 #include "relay.h"
 #include "camera_capture.h"
@@ -7,7 +8,13 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
-WiFiClient espClient;
+#if USE_MQTTS
+#include <WiFiClientSecure.h>
+static WiFiClientSecure espClient;
+#else
+static WiFiClient espClient;
+#endif
+
 PubSubClient client(espClient);
 
 unsigned long lastReconnectAttempt = 0;
@@ -54,7 +61,15 @@ boolean reconnect() {
 }
 
 void setup_mqtt() {
+#if USE_MQTTS
+  espClient.setInsecure(); // Enable TLS without strict CA validation for dynamic/self-signed certs
+  int port = (MQTT_PORT == 1883) ? MQTTS_PORT : MQTT_PORT;
+  client.setServer(MQTT_HOST, port);
+  Serial.printf("[MQTT] Configured for MQTTS (TLS) on %s:%d\n", MQTT_HOST, port);
+#else
   client.setServer(MQTT_HOST, MQTT_PORT);
+  Serial.printf("[MQTT] Configured for plain MQTT on %s:%d\n", MQTT_HOST, MQTT_PORT);
+#endif
   client.setCallback(callback);
   // Increase buffer size to handle base64 image (160x120 YUY2 base64 is ~51KB)
   client.setBufferSize(60000); 
@@ -110,6 +125,8 @@ void mqtt_publish_status() {
   doc["uptime_s"] = millis() / 1000;
   doc["wifi_rssi"] = WiFi.RSSI();
   doc["free_heap"] = ESP.getFreeHeap();
+  doc["alarm"] = current_alarm;
+  doc["heater_locked"] = is_heater_locked();
 
   char buffer[512];
   serializeJson(doc, buffer);

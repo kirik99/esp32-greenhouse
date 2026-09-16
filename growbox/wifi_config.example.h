@@ -8,4 +8,7 @@
 #define MQTT_USER ""
 #define MQTT_PASS ""
 
+// Set to true to enable TLS encryption (MQTTS on port 8883)
+#define USE_MQTTS false
+
 #endif

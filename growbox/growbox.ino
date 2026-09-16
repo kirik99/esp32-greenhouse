@@ -94,5 +94,11 @@ void loop() {
     last_status_time = now;
   }
   
+  static unsigned long last_safety_time = 0;
+  if (now - last_safety_time > 2000) {
+    check_safety_failsafes();
+    last_safety_time = now;
+  }
+
   process_camera();
 }
