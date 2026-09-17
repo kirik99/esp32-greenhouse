@@ -34,8 +34,6 @@ services:
   bridge:
     build: ./bridge
     container_name: growbox_bridge
-    ports:
-      - "127.0.0.1:3001:3001"
     environment:
       - MQTT_HOST=mosquitto
       - MQTT_PORT=1883
