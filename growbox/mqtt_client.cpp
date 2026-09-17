@@ -48,6 +48,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
   } else if (String(topic) == "growbox/camera/capture") {
     Serial.println("[MQTT] Manual camera snapshot trigger received!");
     trigger_camera_capture();
+  } else if (String(topic) == "growbox/co2/calibrate") {
+    Serial.println("[MQTT] CO2 Zero Calibration trigger received!");
+    calibrate_co2_zero();
   }
 }
 
@@ -56,6 +59,7 @@ boolean reconnect() {
     Serial.println("MQTT connected");
     client.subscribe("growbox/relay/set");
     client.subscribe("growbox/camera/capture");
+    client.subscribe("growbox/co2/calibrate");
   }
   return client.connected();
 }

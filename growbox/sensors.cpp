@@ -74,6 +74,21 @@ void setup_sensors() {
 
   // MH-Z19B on built-in Serial1
   Serial1.begin(9600, SERIAL_8N1, PIN_MHZ19_RX, PIN_MHZ19_TX);
+  delay(50);
+
+  // Disable MH-Z19B Auto Baseline Calibration (ABC) to prevent false baseline drift in high-CO2 growbox
+  byte disable_abc[9] = {0xFF, 0x01, 0x79, 0x00, 0x00, 0x00, 0x00, 0x00, 0x86};
+  Serial1.write(disable_abc, 9);
+  Serial1.flush();
+  Serial.println("[SENSORS] MH-Z19B ABC (Auto-Calibration) disabled for mushroom cultivation.");
+}
+
+void calibrate_co2_zero() {
+  // Winsen MH-Z19B Zero-point calibration command (sets current air to 400 ppm baseline)
+  byte zero_cmd[9] = {0xFF, 0x01, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78};
+  Serial1.write(zero_cmd, 9);
+  Serial1.flush();
+  Serial.println("[CO2] Zero-point calibration command sent (400 ppm baseline)!");
 }
 
 int read_co2() {

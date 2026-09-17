@@ -6,6 +6,7 @@
 void setup_sensors();
 void read_sensors();
 void check_safety_failsafes();
+void calibrate_co2_zero();
 
 extern float current_air_temp;
 extern float current_humidity;
