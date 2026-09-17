@@ -5,6 +5,7 @@ import { ConnectionStatus } from './components/ConnectionStatus';
 import { SensorCard } from './components/SensorCard';
 import { RelayPanel } from './components/RelayPanel';
 import { CameraView } from './components/CameraView';
+import { ClimateControlPanel } from './components/ClimateControlPanel';
 
 function App() {
   const { isConnected, sensors, relays, setRelay } = useMQTT();
@@ -24,6 +25,8 @@ function App() {
           </div>
           <ConnectionStatus isConnected={isConnected} />
         </header>
+
+        <ClimateControlPanel />
 
         {!isConnected && (
           <div className="bg-red-900/40 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg flex items-center gap-3">

@@ -29,11 +29,20 @@ __pycache__/
 *.pyo
 
 # Server data, dependencies and secrets
+*.env
+**/.env
+server/.env
 server/bridge/.env
 server/bridge/images/
 server/bridge/node_modules/
+server/bridge/climate_state.json
 server/dashboard/node_modules/
 server/dashboard/dist/
+server/nginx/certs/
+**/certs/
+*.pem
+*.key
+*.crt
 server/mosquitto/data/
 server/mosquitto/log/
 server/influxdb_data/

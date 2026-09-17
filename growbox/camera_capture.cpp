@@ -53,44 +53,68 @@ static void cameraFrameCallback(uvc_frame_t *frame, void *ptr) {
   }
 }
 
-void setup_camera() {
-  Serial.println("[CAMERA] Allocating PSRAM buffers (650KB each)...");
+static size_t actual_xfer_size = 0;
+static size_t actual_frame_size = 0;
 
-  _xferBufferA = (uint8_t *)heap_caps_malloc(XFER_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  _xferBufferB = (uint8_t *)heap_caps_malloc(XFER_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  _frameBuffer = (uint8_t *)heap_caps_malloc(FRAME_BUFFER_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+void setup_camera() {
+  Serial.printf("[CAMERA] psramFound: %d, free_psram: %u, free_heap: %u\n", 
+                psramFound(), (unsigned int)ESP.getFreePsram(), (unsigned int)ESP.getFreeHeap());
+
+  if (psramFound()) {
+    Serial.println("[CAMERA] PSRAM detected. Allocating 64KB buffers in PSRAM...");
+    actual_xfer_size = 64 * 1024;
+    actual_frame_size = 64 * 1024;
+    _xferBufferA = (uint8_t *)heap_caps_malloc(actual_xfer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    _xferBufferB = (uint8_t *)heap_caps_malloc(actual_xfer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    _frameBuffer = (uint8_t *)heap_caps_malloc(actual_frame_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
 
   if (!_xferBufferA || !_xferBufferB || !_frameBuffer) {
-    Serial.println("[CAMERA ERR] PSRAM allocation failed!");
+    if (_xferBufferA) { free(_xferBufferA); _xferBufferA = NULL; }
+    if (_xferBufferB) { free(_xferBufferB); _xferBufferB = NULL; }
+    if (_frameBuffer) { free(_frameBuffer); _frameBuffer = NULL; }
+
+    Serial.println("[CAMERA] Allocating compact 16KB/40KB buffers in SRAM (160x120 YUY2)...");
+    actual_xfer_size = 16 * 1024;
+    actual_frame_size = 40 * 1024;
+    _xferBufferA = (uint8_t *)malloc(actual_xfer_size);
+    _xferBufferB = (uint8_t *)malloc(actual_xfer_size);
+    _frameBuffer = (uint8_t *)malloc(actual_frame_size);
+  }
+
+  if (!_xferBufferA || !_xferBufferB || !_frameBuffer) {
+    Serial.println("[CAMERA ERR] Buffer allocation failed!");
     return;
   }
-  Serial.println("[CAMERA OK] PSRAM buffers allocated successfully");
+  Serial.printf("[CAMERA OK] Buffers allocated: xfer=%u, frame=%u\n", (unsigned int)actual_xfer_size, (unsigned int)actual_frame_size);
 
   usb = new USB_STREAM();
   usb->uvcCamRegisterCb(cameraFrameCallback, NULL);
 
   usb->uvcConfiguration(
-    FRAME_RESOLUTION_ANY,
-    FRAME_RESOLUTION_ANY,
-    FRAME_INTERVAL_FPS_15,
-    XFER_BUFFER_SIZE,
+    160,
+    120,
+    FRAME_INTERVAL_FPS_10,
+    actual_xfer_size,
     _xferBufferA,
     _xferBufferB,
-    FRAME_BUFFER_SIZE,
+    actual_frame_size,
     _frameBuffer
   );
 
   Serial.println("[CAMERA] Starting USB Host stream...");
   usb->start();
-  usb->connectWait(5000);
+  usb->connectWait(3000);
   Serial.println("[CAMERA OK] USB Stream started, waiting for frames...");
   lastPhotoTime = millis();
 }
 
 static volatile bool forceCapture = false;
+static unsigned long forceCaptureStartTime = 0;
 
 void trigger_camera_capture() {
   forceCapture = true;
+  forceCaptureStartTime = millis();
   Serial.println("[CAMERA] On-demand capture requested via MQTT!");
 }
 
@@ -107,19 +131,26 @@ void process_camera() {
     shouldSend = true;
   }
 
-  if (shouldSend && newFrameReady && lastFrameBytes > 0) {
-    newFrameReady = false;
-    forceCapture = false;
-    initialPhotoSent = true;
-    lastPhotoTime = now;
+  if (shouldSend) {
+    if (newFrameReady && lastFrameBytes > 0) {
+      newFrameReady = false;
+      forceCapture = false;
+      initialPhotoSent = true;
+      lastPhotoTime = now;
 
-    Serial.printf("[CAMERA] Preparing frame: %u bytes (%ux%u)...\n", 
-                  (unsigned int)lastFrameBytes, (unsigned int)lastWidth, (unsigned int)lastHeight);
+      Serial.printf("[CAMERA] Preparing frame: %u bytes (%ux%u). Free heap: %u, free PSRAM: %u\n", 
+                    (unsigned int)lastFrameBytes, (unsigned int)lastWidth, (unsigned int)lastHeight,
+                    (unsigned int)ESP.getFreeHeap(), (unsigned int)ESP.getFreePsram());
 
-    String base64_img = base64_encode(_frameBuffer, lastFrameBytes);
-    String json = "{\"format\":\"yuy2\",\"width\":" + String(lastWidth) + ",\"height\":" + String(lastHeight) + ",\"data\":\"" + base64_img + "\"}";
-    
-    mqtt_publish_image(json.c_str());
-    Serial.println("[CAMERA] Frame published over MQTT!");
+      String base64_img = base64_encode(_frameBuffer, lastFrameBytes);
+      String json = "{\"format\":\"yuy2\",\"width\":" + String(lastWidth) + ",\"height\":" + String(lastHeight) + ",\"data\":\"" + base64_img + "\"}";
+      
+      mqtt_publish_image(json.c_str());
+      Serial.println("[CAMERA] Frame published over MQTT!");
+    } else if (forceCapture && (now - forceCaptureStartTime > 10000)) {
+      // 10s timeout waiting for frame
+      Serial.println("[CAMERA WARN] Timeout waiting for new frame from camera stream!");
+      forceCapture = false;
+    }
   }
 }

@@ -73,6 +73,7 @@ void setup_mqtt() {
   client.setCallback(callback);
   // Increase buffer size to handle base64 image (160x120 YUY2 base64 is ~51KB)
   client.setBufferSize(60000); 
+  client.setKeepAlive(60);
 }
 
 void mqtt_loop() {
@@ -115,7 +116,7 @@ void mqtt_publish_status() {
 #if ARDUINOJSON_VERSION_MAJOR >= 7
   JsonDocument doc;
 #else
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<1024> doc;
 #endif
   
   for (int i = 1; i <= 6; i++) {
@@ -127,8 +128,9 @@ void mqtt_publish_status() {
   doc["free_heap"] = ESP.getFreeHeap();
   doc["alarm"] = current_alarm;
   doc["heater_locked"] = is_heater_locked();
+  doc["diag"] = sensor_diag;
 
-  char buffer[512];
+  char buffer[1024];
   serializeJson(doc, buffer);
   client.publish("growbox/status", buffer);
 }

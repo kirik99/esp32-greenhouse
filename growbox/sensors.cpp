@@ -20,17 +20,56 @@ float current_pressure = -999.0;
 float current_substrate_temp = -999.0;
 int current_co2_ppm = -999;
 String current_alarm = "NONE";
+String sensor_diag = "Init";
+
+static int current_ds_pin = PIN_DS18B20;
+
+int autodetect_ds18b20() {
+  const int candidate_pins[] = {PIN_DS18B20, 5, 13, 6, 7};
+  for (int p : candidate_pins) {
+    pinMode(p, INPUT_PULLUP);
+    gpio_pullup_en((gpio_num_t)p);
+    OneWire testOw(p);
+    if (testOw.reset() == 1) {
+      Serial.printf("[SENSORS] DS18B20 detected on GPIO %d!\n", p);
+      return p;
+    }
+  }
+  return PIN_DS18B20;
+}
+
+String scan_i2c_bus() {
+  String found = "";
+  const uint8_t probe_addrs[] = {0x76, 0x77, 0x38, 0x40, 0x44, 0x19};
+  for (uint8_t addr : probe_addrs) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission(true) == 0) {
+      if (found.length() > 0) found += ",";
+      found += "0x" + String(addr, HEX);
+    }
+  }
+  return found.length() > 0 ? found : "none";
+}
 
 void setup_sensors() {
   Wire.begin(PIN_SDA, PIN_SCL);
+  Wire.setClock(100000);
+  Wire.setTimeOut(25);
+  delay(50);
+
   if (bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire)) {
-    Serial.println("[SENSORS] BME280 initialized");
+    Serial.println("[SENSORS] BME280 initialized on GPIO 16/17");
     bme_ok = true;
   } else {
-    Serial.println("[SENSORS] BME280 not found (normal if disconnected)");
+    Serial.printf("[SENSORS] BME280 not found on 16/17. I2C bus devices: %s\n", scan_i2c_bus().c_str());
     bme_ok = false;
   }
 
+  current_ds_pin = autodetect_ds18b20();
+  pinMode(current_ds_pin, INPUT_PULLUP);
+  gpio_pullup_en((gpio_num_t)current_ds_pin);
+  oneWire.begin(current_ds_pin);
+  ds18b20.setOneWire(&oneWire);
   ds18b20.begin();
 
   // MH-Z19B on built-in Serial1
@@ -41,14 +80,14 @@ int read_co2() {
   byte cmd[9] = {0xFF,0x01,0x86,0x00,0x00,0x00,0x00,0x00,0x79};
   byte response[9];
   
-  // Clear buffer
   while(Serial1.available() > 0) {
     Serial1.read();
   }
   
   Serial1.write(cmd, 9);
+  Serial1.flush();
   
-  unsigned long timeout = millis() + 150;
+  unsigned long timeout = millis() + 300;
   while(Serial1.available() < 9) {
     if (millis() > timeout) {
       return -999;
@@ -69,24 +108,66 @@ int read_co2() {
 }
 
 void read_sensors() {
+  String diag = "";
+
+  // 1. BME280
+  if (!bme_ok) {
+    if (bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire)) {
+      Serial.println("[SENSORS] BME280 detected on retry!");
+      bme_ok = true;
+    }
+  }
+
   if (bme_ok) {
     current_air_temp = bme.readTemperature();
     current_humidity = bme.readHumidity();
-    current_pressure = bme.readPressure() / 100.0F; // Convert Pa to hPa
+    current_pressure = bme.readPressure() / 100.0F;
+    diag += "BME:OK; ";
   } else {
     current_air_temp = -999.0;
     current_humidity = -999.0;
     current_pressure = -999.0;
+    diag += "BME:none(i2c=" + scan_i2c_bus() + "); ";
   }
 
-  ds18b20.requestTemperatures();
-  current_substrate_temp = ds18b20.getTempCByIndex(0);
-  if (current_substrate_temp == DEVICE_DISCONNECTED_C) {
+  // 2. DS18B20 (Substrate Temp)
+  pinMode(current_ds_pin, INPUT_PULLUP);
+  gpio_pullup_en((gpio_num_t)current_ds_pin);
+  int idle_lvl = digitalRead(current_ds_pin);
+  int ow_presence = oneWire.reset();
+
+  if (ow_presence == 1) {
+    ds18b20.requestTemperatures();
+    float t = ds18b20.getTempCByIndex(0);
+    if (t > -100.0 && t < 125.0) {
+      current_substrate_temp = t;
+      diag += "DS:OK(pin" + String(current_ds_pin) + "=" + String(t, 1) + "C); ";
+    } else {
+      current_substrate_temp = -999.0;
+      diag += "DS:ErrVal(" + String(t, 1) + "); ";
+    }
+  } else {
     current_substrate_temp = -999.0;
+    diag += "DS:NoPulse(pin" + String(current_ds_pin) + ",lvl=" + String(idle_lvl) + "); ";
+    // Try autodetect next candidate pin
+    int new_pin = autodetect_ds18b20();
+    if (new_pin != current_ds_pin) {
+      current_ds_pin = new_pin;
+      oneWire.begin(current_ds_pin);
+      ds18b20.setOneWire(&oneWire);
+    }
   }
 
+  // 3. MH-Z19B
   current_co2_ppm = read_co2();
-  
+  if (current_co2_ppm != -999) {
+    diag += "CO2:" + String(current_co2_ppm) + "ppm";
+  } else {
+    diag += "CO2:no_reply";
+  }
+
+  sensor_diag = diag;
+  Serial.printf("[DIAG] %s\n", sensor_diag.c_str());
   Serial.printf("Sensors: Air=%.2fC, Hum=%.2f%%, Pres=%.2fhPa, Sub=%.2fC, CO2=%dppm\n", 
                 current_air_temp, current_humidity, current_pressure, current_substrate_temp, current_co2_ppm);
 

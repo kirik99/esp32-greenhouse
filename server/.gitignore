@@ -1,8 +1,17 @@
+.env
+*.env
 bridge/.env
 bridge/images/
 bridge/node_modules/
+bridge/climate_state.json
 dashboard/node_modules/
+dashboard/dist/
+nginx/certs/
+*.pem
+*.key
+*.crt
 influxdb_data/
 influxdb_config/
 mosquitto_data/
 mosquitto_log/
+

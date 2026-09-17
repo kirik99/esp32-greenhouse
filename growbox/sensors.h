@@ -13,5 +13,6 @@ extern float current_pressure;
 extern float current_substrate_temp;
 extern int current_co2_ppm;
 extern String current_alarm;
+extern String sensor_diag;
 
 #endif

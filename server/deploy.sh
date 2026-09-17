@@ -19,13 +19,21 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# 3. Create images directory and set permissions
+# 3. Create images and certs directories
 mkdir -p bridge/images
 chmod 777 bridge/images
+mkdir -p nginx/certs
 
-# 4. Pull and Start Services
+# 4. Generate SSL certificate if missing
+if [ ! -f nginx/certs/cert.pem ]; then
+    echo "[+] Generating self-signed SSL certificates for HTTPS (port 443)..."
+    if command -v openssl &> /dev/null; then
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout nginx/certs/key.pem -out nginx/certs/cert.pem -subj "/CN=growbox"
+    fi
+fi
+
+# 5. Build and Start Services
 echo "[+] Starting Docker containers..."
-docker compose pull
 docker compose build bridge
 docker compose up -d
 
@@ -33,12 +41,9 @@ echo ""
 echo "=========================================="
 echo "    GROWBOX SERVER STARTED SUCCESSFULLY!  "
 echo "=========================================="
-echo "Web Dashboard:  http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_VPS_IP'):80"
-echo "MQTT Broker:    Port 1883 (for ESP32)"
-echo "InfluxDB UI:    http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_VPS_IP'):8086"
+echo "Web Dashboard:  https://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_SERVER_IP') (Port 443 / 80)"
+echo "MQTT Broker:    Port 1883 (for ESP32 on local Wi-Fi)"
 echo ""
-echo "Firewall reminder (if UFW enabled):"
-echo "  sudo ufw allow 22/tcp"
-echo "  sudo ufw allow 80/tcp"
-echo "  sudo ufw allow 1883/tcp"
+echo "External access (Router / Firewall):"
+echo "  Only ports 80 (HTTP) and 443 (HTTPS/WSS) need to be forwarded!"
 echo "=========================================="

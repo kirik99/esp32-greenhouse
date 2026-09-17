@@ -6,6 +6,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const jpeg = require('jpeg-js');
+const { ClimateController } = require('./automation');
 
 // Configuration
 const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
@@ -29,6 +30,9 @@ writeApi.useDefaultTags({ location: 'growbox' });
 
 // MQTT Setup
 const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`);
+
+// Climate Controller State Machine
+const climate = new ClimateController(mqttClient);
 
 mqttClient.on('connect', () => {
   console.log(`[${new Date().toISOString()}] Connected to MQTT broker at ${MQTT_HOST}:${MQTT_PORT}`);
@@ -85,6 +89,9 @@ mqttClient.on('message', async (topic, message) => {
       
       writeApi.writePoint(point);
       console.log(`[${new Date().toISOString()}] Sensor data written to InfluxDB:`, data);
+      
+      // Feed to intelligent climate controller
+      climate.processSensors(data);
     } 
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
@@ -102,6 +109,9 @@ mqttClient.on('message', async (topic, message) => {
       
       writeApi.writePoint(point);
       console.log(`[${new Date().toISOString()}] Status data written to InfluxDB:`, data);
+
+      // Feed to intelligent climate controller
+      climate.updateHardwareStatus(data);
     }
     else if (topic === 'growbox/image/raw') {
       console.log(`[${new Date().toISOString()}] Received raw image data, size: ${message.length} bytes`);
@@ -173,9 +183,55 @@ setInterval(() => {
 // Express App setup
 const app = express();
 app.use(cors()); // Разрешаем CORS для локальной разработки
+app.use(express.json());
+
+// PIN Authentication & Session Management
+const ADMIN_PIN = process.env.ADMIN_PIN || '2212';
+const activeSessions = new Set();
+
+app.post('/api/auth/verify', (req, res) => {
+  const { pin } = req.body;
+  if (!pin) {
+    return res.status(400).json({ success: false, error: 'PIN is required' });
+  }
+  if (String(pin).trim() === String(ADMIN_PIN).trim()) {
+    const token = Buffer.from(`${Date.now()}_${Math.random()}`).toString('base64');
+    activeSessions.add(token);
+    setTimeout(() => activeSessions.delete(token), 3600000); // 1 hour token lifetime
+    return res.json({ success: true, token });
+  }
+  return res.status(401).json({ success: false, error: 'Invalid PIN' });
+});
+
+// Climate Controller REST API
+app.get('/api/climate', (req, res) => {
+  res.json(climate.getState());
+});
+
+app.post('/api/climate/mode', (req, res) => {
+  try {
+    const { mode } = req.body;
+    if (!mode) return res.status(400).json({ error: 'Missing mode parameter' });
+    const state = climate.setMode(mode);
+    res.json({ success: true, state });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/climate/setpoints', (req, res) => {
+  try {
+    const { mode, setpoints } = req.body;
+    if (!mode || !setpoints) return res.status(400).json({ error: 'Missing mode or setpoints parameter' });
+    const updated = climate.updateProfileSetpoints(mode, setpoints);
+    res.json({ success: true, profile: updated });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', climate_mode: climate.mode });
 });
 
 // Ручка для принудительного снимка с камеры
