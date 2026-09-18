@@ -134,10 +134,24 @@ void read_sensors() {
   }
 
   if (bme_ok) {
-    current_air_temp = bme.readTemperature();
-    current_humidity = bme.readHumidity();
-    current_pressure = bme.readPressure() / 100.0F;
-    diag += "BME:OK; ";
+    float t = bme.readTemperature();
+    float h = bme.readHumidity();
+    float p = bme.readPressure() / 100.0F;
+
+    // Validate sensor readings: check for NaN, I2C bus dropouts, or out-of-bounds spikes
+    if (isnan(t) || isnan(h) || isnan(p) || t < -40.0 || t > 80.0 || h < 0.0 || h > 100.0 || p < 300.0 || p > 1200.0) {
+      Serial.printf("[SENSORS WARN] BME280 glitch/disconnect: T=%.1f, H=%.1f, P=%.1f. Marking offline for re-init.\n", t, h, p);
+      bme_ok = false;
+      current_air_temp = -999.0;
+      current_humidity = -999.0;
+      current_pressure = -999.0;
+      diag += "BME:glitch(i2c=" + scan_i2c_bus() + "); ";
+    } else {
+      current_air_temp = t;
+      current_humidity = h;
+      current_pressure = p;
+      diag += "BME:OK; ";
+    }
   } else {
     current_air_temp = -999.0;
     current_humidity = -999.0;
