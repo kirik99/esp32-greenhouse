@@ -2,19 +2,19 @@
 
 Готовая серверная инфраструктура для автоматизированного культивационного бокса Growbox IoT (*Pleurotus ostreatus*). Работает локально дома (Docker Desktop / Linux) и на любом удалённом сервере (VPS).
 
-## Архитектура портов и маршрутизации (Всё через 80 и 443)
+## Архитектура портов и маршрутизации
 
-Для доступа извне (через проброс портов на домашнем роутере или фаервол VPS) наружу открываются **только 2 стандартных порта: 80 (HTTP) и 443 (HTTPS)**. Все остальные сервисы изолированы внутри Docker.
+По умолчанию встроенный Nginx слушает только **порт 80 (HTTP)**. Для публичного HTTPS рекомендуется использовать отдельный reverse proxy (Nginx, Nginx Proxy Manager, Traefik или Caddy), который завершает TLS и проксирует запросы в `http://growbox-host:80`. Это исключает зависимость обычного запуска dashboard от локальных файлов сертификата. Для установок без внешнего proxy доступен опциональный self-signed HTTPS на порту 443.
 
 ```
-                     Внешний мир / Интернет
+                      Внешний reverse proxy
                                 |
-                   [ Порты 80 (HTTP) и 443 (HTTPS) ]
+                    [ HTTPS / WSS termination ]
                                 |
                                 v
                +----------------------------------+
-               |      Nginx Reverse Proxy         |
-               |       (Порты 80 / 443)           |
+               |      Growbox Nginx (HTTP)        |
+               |            (Порт 80)             |
                +----------------+-----------------+
                                 |
          +----------------------+----------------------+
@@ -38,8 +38,8 @@
 ```
 
 ### Преимущества такой схемы:
-1. **Максимальная безопасность:** InfluxDB (`8086`), Bridge API (`3001`) и WebSockets (`9001`) заблокированы на внешнем интерфейсе и не торчат наружу.
-2. **Один порт для всего веб-трафика:** Дашборд, снимки с камеры, управление климатом и живой поток телеметрии по WebSockets работают через единое защищённое соединение **HTTPS / WSS (порт 443)**.
+1. **Простой запуск:** dashboard запускается без генерации и монтирования самоподписанных сертификатов.
+2. **Один upstream для reverse proxy:** Дашборд, API и MQTT WebSockets доступны через порт `80`; внешний proxy добавляет HTTPS/WSS.
 3. **ESP32 на домашнем Wi-Fi:** Общается с брокером по легковесному протоколу MQTT (порт 1883) напрямую внутри домашней локальной сети без выхода в публичный интернет.
 
 ---
@@ -82,11 +82,47 @@ cp .env.example .env
 ```
 
 ### Шаг 2. Запуск контейнеров
+
+HTTP или внешний reverse proxy:
+
 ```bash
 docker compose up -d --build
 ```
-*Docker автоматически соберет сервис моста на Node.js 24 LTS, сгенерирует SSL-сертификаты и запустит Nginx на портах 80 и 443.*
+
+Прямой HTTPS без внешнего reverse proxy:
+
+```bash
+chmod +x deploy.sh
+./deploy.sh --https
+```
+
+*Docker автоматически соберет сервис моста на Node.js 24 LTS и запустит Nginx на порту 80.*
 
 ### Шаг 3. Доступ
-* **Дашборд:** `https://localhost` (или внешний IP/домен вашего сервера)
-* **API статуса микроклимата:** `https://localhost/api/climate`
+* **Дашборд:** `http://localhost` (или IP вашего сервера)
+* **API статуса микроклимата:** `http://localhost/api/climate`
+
+### Внешний HTTPS reverse proxy
+
+Направьте один upstream на `http://growbox-host:80` и обязательно разрешите WebSocket Upgrade для `/mqtt`. Порты dashboard `443`, bridge `3001` и Mosquitto WebSockets `9001` публиковать не нужно. Например:
+
+```nginx
+location / {
+    proxy_pass http://growbox-host:80;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+### Прямой HTTPS без внешнего proxy
+
+Команда `./deploy.sh --https` генерирует self-signed сертификат и добавляет `docker-compose.https.yml`, не меняя HTTP-конфигурацию по умолчанию. То же самое можно запустить вручную после создания `nginx/certs/cert.pem` и `nginx/certs/key.pem`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build
+```
+
+Дашборд будет доступен одновременно по HTTP на порту 80 и HTTPS на `${SSL_PORT:-443}`. Браузер покажет предупреждение, пока self-signed сертификат не будет заменён доверенным.

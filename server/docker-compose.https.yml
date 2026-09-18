@@ -1,0 +1,7 @@
+services:
+  dashboard:
+    ports:
+      - "${SSL_PORT:-443}:443"
+    volumes:
+      - ./nginx/https.conf:/etc/nginx/conf.d/https.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
