@@ -5,10 +5,26 @@ services:
     ports:
       - "1883:1883"
       - "127.0.0.1:9001:9001"
+    environment:
+      - MQTT_ESP32_USER=${MQTT_ESP32_USER:-growbox_esp32}
+      - MQTT_ESP32_PASSWORD=${MQTT_ESP32_PASSWORD:-growbox_esp32_secret}
+      - MQTT_BRIDGE_USER=${MQTT_BRIDGE_USER:-growbox_bridge}
+      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD:-growbox_bridge_secret}
+      - MQTT_WEB_USER=${MQTT_WEB_USER:-growbox_web}
+      - MQTT_WEB_PASSWORD=${MQTT_WEB_PASSWORD:-growbox_web_secret}
+    entrypoint: >
+      sh -c '
+        mkdir -p /mosquitto/data;
+        mosquitto_passwd -c -b /mosquitto/data/passwords.txt "$$MQTT_ESP32_USER" "$$MQTT_ESP32_PASSWORD";
+        mosquitto_passwd -b /mosquitto/data/passwords.txt "$$MQTT_BRIDGE_USER" "$$MQTT_BRIDGE_PASSWORD";
+        mosquitto_passwd -b /mosquitto/data/passwords.txt "$$MQTT_WEB_USER" "$$MQTT_WEB_PASSWORD";
+        chown root:mosquitto /mosquitto/data/passwords.txt;
+        chmod 0640 /mosquitto/data/passwords.txt;
+        exec /docker-entrypoint.sh /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
+      '
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
-      - ./mosquitto/passwords.txt:/mosquitto/config/passwords.txt:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     restart: unless-stopped
@@ -39,6 +55,9 @@ services:
       - MQTT_PORT=1883
       - MQTT_USER=${MQTT_BRIDGE_USER:-growbox_bridge}
       - MQTT_PASSWORD=${MQTT_BRIDGE_PASSWORD:-growbox_bridge_secret}
+      - MQTT_WEB_USER=${MQTT_WEB_USER:-growbox_web}
+      - MQTT_WEB_PASSWORD=${MQTT_WEB_PASSWORD:-growbox_web_secret}
+      - PUBLIC_TELEMETRY=${PUBLIC_TELEMETRY:-false}
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-growbox-super-secret-token}
       - INFLUXDB_ORG=${INFLUXDB_ORG:-growbox}

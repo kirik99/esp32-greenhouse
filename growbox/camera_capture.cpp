@@ -44,12 +44,91 @@ static String base64_encode(const uint8_t *in, size_t in_len) {
   return out;
 }
 
+static volatile bool snapshot_capture_requested = false;
+static volatile bool camera_upload_in_progress = false;
+
+struct CameraFrameSnapshot {
+  uint8_t* buffer;
+  size_t bytes;
+  uint32_t width;
+  uint32_t height;
+};
+
+static void camera_upload_task(void *pvParameters) {
+  CameraFrameSnapshot* snap = (CameraFrameSnapshot*)pvParameters;
+  if (!snap) {
+    camera_upload_in_progress = false;
+    vTaskDelete(NULL);
+    return;
+  }
+
+  uint32_t w = snap->width;
+  uint32_t h = snap->height;
+  size_t bytes = snap->bytes;
+
+  Serial.printf("[CAMERA] Background upload task running on Core %d: encoding %u bytes (%ux%u). Free heap: %u\n",
+                xPortGetCoreID(), (unsigned int)bytes, (unsigned int)w, (unsigned int)h,
+                (unsigned int)ESP.getFreeHeap());
+
+  String base64_img = base64_encode(snap->buffer, bytes);
+
+  // Free the snapshot buffer as soon as base64 string is ready to conserve memory
+  if (snap->buffer) {
+    free(snap->buffer);
+    snap->buffer = NULL;
+  }
+  delete snap;
+
+  String json = "{\"format\":\"yuy2\",\"width\":" + String(w) + ",\"height\":" + String(h) + ",\"data\":\"" + base64_img + "\"}";
+
+  Serial.printf("[CAMERA] Publishing payload (%u bytes) via MQTT in background task...\n", (unsigned int)json.length());
+  mqtt_publish_image(json.c_str());
+
+  camera_upload_in_progress = false;
+  vTaskDelete(NULL);
+}
+
 static void cameraFrameCallback(uvc_frame_t *frame, void *ptr) {
-  if (frame && frame->data_bytes > 0) {
-    lastFrameBytes = frame->data_bytes;
-    lastWidth = frame->width;
-    lastHeight = frame->height;
-    newFrameReady = true;
+  if (!frame || frame->data_bytes == 0) return;
+
+  // Atomically capture frame when requested, while frame->data is stable and owned by driver callback
+  if (snapshot_capture_requested && !camera_upload_in_progress) {
+    snapshot_capture_requested = false;
+
+    uint8_t* snap_buf = NULL;
+    if (psramFound()) {
+      snap_buf = (uint8_t*)heap_caps_malloc(frame->data_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!snap_buf) {
+      snap_buf = (uint8_t*)malloc(frame->data_bytes);
+    }
+
+    if (snap_buf) {
+      memcpy(snap_buf, frame->data, frame->data_bytes);
+      CameraFrameSnapshot* snap = new CameraFrameSnapshot{snap_buf, frame->data_bytes, frame->width, frame->height};
+      camera_upload_in_progress = true;
+
+      BaseType_t res = xTaskCreatePinnedToCore(
+        camera_upload_task,
+        "cam_upload",
+        20 * 1024,
+        (void*)snap,
+        1, // Priority 1 (low background priority)
+        NULL,
+        0  // Core 0 (main Arduino loop runs on Core 1)
+      );
+
+      if (res != pdPASS) {
+        Serial.println("[CAMERA ERR] Failed to create background upload task! Freeing snapshot.");
+        if (snap_buf) free(snap_buf);
+        delete snap;
+        camera_upload_in_progress = false;
+      } else {
+        Serial.println("[CAMERA] Frame atomically captured in USB callback and dispatched to Core 0 task.");
+      }
+    } else {
+      Serial.println("[CAMERA ERR] Out of memory allocating snapshot buffer in callback!");
+    }
   }
 }
 
@@ -118,49 +197,6 @@ void trigger_camera_capture() {
   Serial.println("[CAMERA] On-demand capture requested via MQTT!");
 }
 
-static volatile bool camera_upload_in_progress = false;
-
-struct CameraFrameSnapshot {
-  uint8_t* buffer;
-  size_t bytes;
-  uint32_t width;
-  uint32_t height;
-};
-
-static void camera_upload_task(void *pvParameters) {
-  CameraFrameSnapshot* snap = (CameraFrameSnapshot*)pvParameters;
-  if (!snap) {
-    camera_upload_in_progress = false;
-    vTaskDelete(NULL);
-    return;
-  }
-
-  uint32_t w = snap->width;
-  uint32_t h = snap->height;
-  size_t bytes = snap->bytes;
-
-  Serial.printf("[CAMERA] Background upload task running on Core %d: encoding %u bytes (%ux%u). Free heap: %u\n",
-                xPortGetCoreID(), (unsigned int)bytes, (unsigned int)w, (unsigned int)h,
-                (unsigned int)ESP.getFreeHeap());
-
-  String base64_img = base64_encode(snap->buffer, bytes);
-
-  // Free the snapshot buffer as soon as base64 string is ready to conserve memory
-  if (snap->buffer) {
-    free(snap->buffer);
-    snap->buffer = NULL;
-  }
-  delete snap;
-
-  String json = "{\"format\":\"yuy2\",\"width\":" + String(w) + ",\"height\":" + String(h) + ",\"data\":\"" + base64_img + "\"}";
-
-  Serial.printf("[CAMERA] Publishing payload (%u bytes) via MQTT in background task...\n", (unsigned int)json.length());
-  mqtt_publish_image(json.c_str());
-
-  camera_upload_in_progress = false;
-  vTaskDelete(NULL);
-}
-
 void process_camera() {
   unsigned long now = millis();
 
@@ -175,56 +211,14 @@ void process_camera() {
   }
 
   if (shouldSend) {
-    if (newFrameReady && lastFrameBytes > 0) {
-      if (camera_upload_in_progress) {
-        Serial.println("[CAMERA] Background upload still in progress, waiting...");
-        return;
-      }
-      newFrameReady = false;
-      forceCapture = false;
-      initialPhotoSent = true;
-      lastPhotoTime = now;
-
-      // Allocate isolated copy of the frame buffer in PSRAM or heap
-      uint8_t* snap_buf = NULL;
-      if (psramFound()) {
-        snap_buf = (uint8_t*)heap_caps_malloc(lastFrameBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-      }
-      if (!snap_buf) {
-        snap_buf = (uint8_t*)malloc(lastFrameBytes);
-      }
-
-      if (!snap_buf) {
-        Serial.println("[CAMERA ERR] Failed to allocate snapshot buffer for background upload!");
-        return;
-      }
-
-      memcpy(snap_buf, _frameBuffer, lastFrameBytes);
-      CameraFrameSnapshot* snap = new CameraFrameSnapshot{snap_buf, lastFrameBytes, lastWidth, lastHeight};
-
-      camera_upload_in_progress = true;
-      BaseType_t res = xTaskCreatePinnedToCore(
-        camera_upload_task,
-        "cam_upload",
-        20 * 1024,
-        (void*)snap,
-        1, // Priority 1 (low priority)
-        NULL,
-        0  // Pin to Core 0 (main Arduino loop is on Core 1)
-      );
-
-      if (res != pdPASS) {
-        Serial.println("[CAMERA ERR] Failed to create background upload task! Resetting flag.");
-        if (snap_buf) free(snap_buf);
-        delete snap;
-        camera_upload_in_progress = false;
-      } else {
-        Serial.println("[CAMERA] Frame upload dispatched to background FreeRTOS task on Core 0 (non-blocking).");
-      }
-    } else if (forceCapture && (now - forceCaptureStartTime > 10000)) {
-      // 10s timeout waiting for frame
-      Serial.println("[CAMERA WARN] Timeout waiting for new frame from camera stream!");
-      forceCapture = false;
+    if (camera_upload_in_progress) {
+      Serial.println("[CAMERA] Background upload still in progress, waiting...");
+      return;
     }
+    forceCapture = false;
+    initialPhotoSent = true;
+    lastPhotoTime = now;
+    snapshot_capture_requested = true;
+    Serial.println("[CAMERA] Snapshot requested: will capture next complete frame inside USB callback.");
   }
 }

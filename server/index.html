@@ -387,32 +387,10 @@
       container.appendChild(card);
     });
 
-    // MQTT Connection (Strictly Read-Only Client for Telemetry & Status Streaming)
-    const client = mqtt.connect(wsUrl, {
-      username: 'growbox_web',
-      password: 'growbox_web_secret',
-      clientId: 'growbox_web_' + Math.random().toString(16).slice(2, 8)
-    });
+    // Dynamic MQTT Connection (No credentials hardcoded in HTML!)
+    let client = null;
 
-    client.on('connect', () => {
-      const dot = document.getElementById('statusDot');
-      dot.className = 'w-2 h-2 rounded-full bg-emerald-400 glow-dot';
-      document.getElementById('statusText').innerText = 'ONLINE';
-      document.getElementById('statusText').className = 'font-medium text-emerald-400 font-mono text-[11px]';
-      client.subscribe('growbox/sensors');
-      client.subscribe('growbox/status');
-      client.subscribe('growbox/controller/state');
-      client.subscribe('growbox/image/raw');
-    });
-
-    client.on('offline', () => {
-      const dot = document.getElementById('statusDot');
-      dot.className = 'w-2 h-2 rounded-full bg-rose-500';
-      document.getElementById('statusText').innerText = 'OFFLINE';
-      document.getElementById('statusText').className = 'font-medium text-rose-400 font-mono text-[11px]';
-    });
-
-    client.on('message', (topic, message) => {
+    function handleMqttMessage(topic, message) {
       try {
         const text = message.toString();
 
@@ -482,9 +460,63 @@
       } catch (err) {
         console.error('MQTT parse error:', err);
       }
-    });
+    }
 
-    // Security & Server-side Auth (Credentials managed in server .env, zero secrets in Git)
+    function initMqtt(mqttCreds) {
+      if (client) {
+        try { client.end(true); } catch(e) {}
+        client = null;
+      }
+      if (!mqttCreds || !mqttCreds.username) return;
+
+      client = mqtt.connect(wsUrl, {
+        username: mqttCreds.username,
+        password: mqttCreds.password,
+        clientId: 'growbox_web_' + Math.random().toString(16).slice(2, 8)
+      });
+
+      client.on('connect', () => {
+        const dot = document.getElementById('statusDot');
+        if (dot) dot.className = 'w-2 h-2 rounded-full bg-emerald-400 glow-dot';
+        const text = document.getElementById('statusText');
+        if (text) {
+          text.innerText = 'ONLINE';
+          text.className = 'font-medium text-emerald-400 font-mono text-[11px]';
+        }
+        client.subscribe('growbox/sensors');
+        client.subscribe('growbox/status');
+        client.subscribe('growbox/controller/state');
+        client.subscribe('growbox/image/raw');
+      });
+
+      client.on('offline', () => {
+        const dot = document.getElementById('statusDot');
+        if (dot) dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+        const text = document.getElementById('statusText');
+        if (text) {
+          text.innerText = 'OFFLINE';
+          text.className = 'font-medium text-rose-400 font-mono text-[11px]';
+        }
+      });
+
+      client.on('message', handleMqttMessage);
+    }
+
+    function disconnectMqtt() {
+      if (client) {
+        try { client.end(true); } catch(e) {}
+        client = null;
+      }
+      const dot = document.getElementById('statusDot');
+      if (dot) dot.className = 'w-2 h-2 rounded-full bg-zinc-600';
+      const text = document.getElementById('statusText');
+      if (text) {
+        text.innerText = 'LOCKED';
+        text.className = 'font-medium text-zinc-500 font-mono text-[11px]';
+      }
+    }
+
+    // Security & Server-side Auth (Credentials managed dynamically from server .env, zero secrets in HTML)
     let isUnlocked = false;
     let unlockExpiresAt = 0;
     let pendingAction = null;
@@ -504,6 +536,13 @@
         authText.className = 'font-medium text-emerald-400 font-mono text-[11px]';
         authBadge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-950/40 border border-emerald-500/30 text-xs transition cursor-pointer';
       } else {
+        if (isUnlocked) {
+          // Session expired
+          isUnlocked = false;
+          sessionToken = null;
+          sessionStorage.removeItem('growbox_session_token');
+          disconnectMqtt();
+        }
         isUnlocked = false;
         authIcon.innerText = '🔒';
         authText.innerText = 'LOCKED';
@@ -518,6 +557,8 @@
         isUnlocked = false;
         unlockExpiresAt = 0;
         sessionToken = null;
+        sessionStorage.removeItem('growbox_session_token');
+        disconnectMqtt();
         checkLockStatus();
       } else {
         openPinModal();
@@ -555,15 +596,24 @@
         if (data && data.success) {
           isUnlocked = true;
           sessionToken = data.token;
+          sessionStorage.setItem('growbox_session_token', sessionToken);
           unlockExpiresAt = Date.now() + 15 * 60 * 1000;
           checkLockStatus();
           closePinModal();
+
+          if (data.mqtt) {
+            initMqtt(data.mqtt);
+          }
+          loadLatestImage();
+          fetchInitialClimate();
+
           if (typeof pendingAction === 'function') {
             const act = pendingAction;
             pendingAction = null;
             act();
           }
         } else {
+          err.innerText = data.error || 'Неверный PIN-код';
           err.classList.remove('hidden');
           input.value = '';
           input.focus();
@@ -571,6 +621,7 @@
       })
       .catch(e => {
         console.warn('Auth verification error:', e);
+        err.innerText = 'Ошибка соединения с сервером';
         err.classList.remove('hidden');
         input.value = '';
         input.focus();
@@ -584,6 +635,7 @@
         openPinModal(action);
       }
     }
+
 
     // 4 Cultivation Profiles (Pleurotus ostreatus)
     const PROFILES = {
@@ -741,20 +793,31 @@
       const img = document.getElementById('camImage');
       const placeholder = document.getElementById('camPlaceholder');
       const meta = document.getElementById('camMeta');
+      const headers = sessionToken ? { 'Authorization': 'Bearer ' + sessionToken } : {};
 
-      fetch(apiBase + '/api/images')
-        .then(res => res.json())
+      fetch(apiBase + '/api/images', { headers })
+        .then(res => {
+          if (res.status === 401) {
+            placeholder.innerHTML = '<span class="text-3xl">🔒</span><p class="text-sm font-medium text-zinc-400">Требуется PIN для просмотра камеры</p>';
+            placeholder.classList.remove('hidden');
+            img.classList.add('hidden');
+            return null;
+          }
+          return res.json();
+        })
         .then(images => {
-          if (Array.isArray(images) && images.length > 0) {
+          if (!images || !Array.isArray(images)) return;
+          if (images.length > 0) {
             const countBadge = document.getElementById('photoCountBadge');
             if (countBadge) countBadge.innerText = images.length + ' фото сохранено';
 
             const strip = document.getElementById('photoGalleryStrip');
             if (strip) {
               strip.innerHTML = '';
+              const tokenParam = sessionToken ? '?token=' + encodeURIComponent(sessionToken) : '';
               images.slice(0, 6).forEach((filename) => {
                 const thumb = document.createElement('img');
-                thumb.src = apiBase + '/api/images/' + filename;
+                thumb.src = apiBase + '/api/images/' + filename + tokenParam;
                 thumb.title = filename;
                 thumb.className = 'w-14 h-11 object-cover rounded border border-white/10 hover:border-emerald-400 cursor-pointer transition flex-shrink-0';
                 thumb.onclick = () => {
@@ -767,7 +830,8 @@
               });
             }
 
-            img.src = apiBase + '/api/latest-image?t=' + Date.now();
+            const tokenQuery = sessionToken ? '&token=' + encodeURIComponent(sessionToken) : '';
+            img.src = apiBase + '/api/latest-image?t=' + Date.now() + tokenQuery;
             img.onload = () => {
               img.classList.remove('hidden');
               placeholder.classList.add('hidden');
@@ -778,18 +842,58 @@
         .catch(err => console.warn('Gallery load error:', err));
     }
 
-    // Auto-fetch latest photo on startup & every 60s
-    setTimeout(loadLatestImage, 1000);
-    setInterval(loadLatestImage, 60000);
-
     // Fetch initial climate state on startup & periodically
     function fetchInitialClimate() {
-      fetch(apiBase + '/api/climate')
-        .then(r => r.json())
-        .then(st => updateClimateUI(st))
+      const headers = sessionToken ? { 'Authorization': 'Bearer ' + sessionToken } : {};
+      fetch(apiBase + '/api/climate', { headers })
+        .then(r => {
+          if (!r.ok) return null;
+          return r.json();
+        })
+        .then(st => {
+          if (st) updateClimateUI(st);
+        })
         .catch(err => console.warn('Failed to fetch initial climate:', err));
     }
-    setTimeout(fetchInitialClimate, 500);
+
+    function checkInitialSession() {
+      const savedToken = sessionStorage.getItem('growbox_session_token');
+      const headers = savedToken ? { 'Authorization': 'Bearer ' + savedToken } : {};
+
+      fetch(apiBase + '/api/auth/session', { headers })
+        .then(r => r.json())
+        .then(data => {
+          if (data && data.authenticated) {
+            isUnlocked = true;
+            sessionToken = savedToken;
+            unlockExpiresAt = Date.now() + 15 * 60 * 1000;
+            checkLockStatus();
+            if (data.mqtt) initMqtt(data.mqtt);
+            loadLatestImage();
+            fetchInitialClimate();
+          } else if (data && data.public_telemetry) {
+            if (data.mqtt) initMqtt(data.mqtt);
+            loadLatestImage();
+            fetchInitialClimate();
+          } else {
+            // Private telemetry, not yet authenticated
+            disconnectMqtt();
+            checkLockStatus();
+            const placeholder = document.getElementById('camPlaceholder');
+            if (placeholder) {
+              placeholder.innerHTML = '<span class="text-3xl">🔒</span><p class="text-sm font-medium text-zinc-400">Требуется PIN для просмотра камеры и телеметрии</p>';
+              placeholder.classList.remove('hidden');
+            }
+          }
+        })
+        .catch(err => {
+          console.warn('Initial session check error:', err);
+        });
+    }
+
+    // Startup session check & periodic refresh
+    checkInitialSession();
+    setInterval(loadLatestImage, 60000);
     setInterval(fetchInitialClimate, 30000);
   </script>
 

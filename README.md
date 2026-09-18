@@ -163,13 +163,15 @@
 #define MQTT_HOST     "192.168.1.118"
 #define MQTT_PORT     1883
 #define MQTT_PATH     "/mqtt"
-#define MQTT_USER     ""
-#define MQTT_PASS     ""
+#define MQTT_USER     "growbox_esp32"
+#define MQTT_PASS     "growbox_esp32_secret" // Должен совпадать с MQTT_ESP32_PASSWORD в server/.env
 
 #define USE_MQTT_WEBSOCKETS     false  // Прямой TCP транспорт
 #define USE_MQTT_TLS            false  // Без шифрования для локальной сети
 #define MQTT_ALLOW_INSECURE_TLS false
 ```
+> [!NOTE]
+> Mosquitto настроен с `allow_anonymous false`, поэтому аутентификация строго обязательна даже при прямом подключении на локальный порт 1883. Используйте логин `growbox_esp32` и пароль, заданный в `.env`.
 
 ### 3. Прошивка микроконтроллера ESP32-S3
 
@@ -247,17 +249,16 @@
      * **Строго READ-ONLY**: подписка на телеметрию и статус (`growbox/sensors`, `growbox/status`, `growbox/controller/state`, `growbox/image/raw`).
      * Любые попытки несанкционированной публикации в топики управления с веб-клиента блокируются на уровне брокера Mosquitto.
 
-2. **Защита управления реле через REST API:**
-   * Управление силовыми реле и принудительный снимок выполняются через аутентифицированный REST API сервера (`POST /api/relay`, `POST /api/capture`).
-   * REST API защищено PIN-кодом (по умолчанию `2212`) с выдачей сессионного токена (`Authorization: Bearer <token>`) на 15 минут.
+2. **Защита управления и телеметрии через REST API:**
+   * Управление силовыми реле и ручной запуск снимка защищены серверным PIN-кодом (`POST /api/relay`, `POST /api/capture`).
+   * Защита от подбора PIN: проверка на бэкенде через `crypto.timingSafeEqual`, искусственная задержка 500мс и блокировка IP-адреса на 15 минут после 5 неверных попыток.
+   * Опция `PUBLIC_TELEMETRY` в `server/.env`: при `false` (по умолчанию) история показаний датчиков, галерея и снимки закрыты и требуют PIN-авторизации.
    * Прямая публикация команд реле из браузера в MQTT полностью исключена.
 
-3. **Управление паролями Mosquitto:**
-   * Пароли хранятся в формате `sha512-pbkdf2` в `server/mosquitto/passwords.txt` (файл в `.gitignore`).
-   * Для генерации или смены паролей используется утилита `mosquitto_passwd`:
-     ```bash
-     docker exec -it growbox_mosquitto mosquitto_passwd -b /mosquitto/config/passwords.txt <пользователь> <новый_пароль>
-     ```
+3. **Централизованное управление учетными данными через `.env`:**
+   * Все пароли для ролей (`MQTT_ESP32_PASSWORD`, `MQTT_BRIDGE_PASSWORD`, `MQTT_WEB_PASSWORD`) и токен InfluxDB задаются в едином файле `server/.env` (на основе `.env.example`).
+   * При старте контейнера Mosquitto файл `/mosquitto/data/passwords.txt` генерируется автоматически утилитой `mosquitto_passwd` в изолированном Docker-томе.
+   * В веб-клиенте (`index.html`) отсутствуют зашитые пароли: дашборд получает временные реквизиты для чтения MQTT динамически по HTTPS при успешном вводе PIN.
 
 ---
 

@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const jpeg = require('jpeg-js');
 const { ClimateController } = require('./automation');
 
@@ -13,6 +14,9 @@ const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
 const MQTT_PORT = process.env.MQTT_PORT || 1883;
 const MQTT_USER = process.env.MQTT_USER || 'growbox_bridge';
 const MQTT_PASSWORD = process.env.MQTT_PASSWORD || 'growbox_bridge_secret';
+const MQTT_WEB_USER = process.env.MQTT_WEB_USER || 'growbox_web';
+const MQTT_WEB_PASSWORD = process.env.MQTT_WEB_PASSWORD || 'growbox_web_secret';
+const PUBLIC_TELEMETRY = process.env.PUBLIC_TELEMETRY === 'true';
 const INFLUXDB_URL = process.env.INFLUXDB_URL || 'http://localhost:8086';
 const INFLUXDB_TOKEN = process.env.INFLUXDB_TOKEN || 'growbox-super-secret-token';
 const INFLUXDB_ORG = process.env.INFLUXDB_ORG || 'growbox';
@@ -191,33 +195,139 @@ const app = express();
 app.use(cors()); // Разрешаем CORS для локальной разработки
 app.use(express.json());
 
-// PIN Authentication & Session Management
+// PIN Authentication, Brute-force Protection & Session Management
 const ADMIN_PIN = process.env.ADMIN_PIN || '2212';
 const activeSessions = new Set();
+const loginAttempts = new Map(); // ip -> { count, lockedUntil }
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function checkRateLimit(ip) {
+  const record = loginAttempts.get(ip);
+  if (record && record.lockedUntil && Date.now() < record.lockedUntil) {
+    const waitSec = Math.ceil((record.lockedUntil - Date.now()) / 1000);
+    return { locked: true, waitSec };
+  }
+  return { locked: false };
+}
+
+function recordFailedLogin(ip) {
+  const record = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+  record.count += 1;
+  if (record.count >= 5) {
+    record.lockedUntil = Date.now() + 15 * 60 * 1000; // 15 min lock
+    record.count = 0;
+  }
+  loginAttempts.set(ip, record);
+}
+
+function recordSuccessfulLogin(ip) {
+  loginAttempts.delete(ip);
+}
+
+function timingSafeCompare(a, b) {
+  const bufA = Buffer.from(String(a).trim());
+  const bufB = Buffer.from(String(b).trim());
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 app.post('/api/auth/verify', (req, res) => {
+  const ip = getClientIp(req);
+  const { locked, waitSec } = checkRateLimit(ip);
+  if (locked) {
+    return res.status(429).json({
+      success: false,
+      error: `Слишком много неверных попыток ввода PIN. Доступ заблокирован на ${Math.ceil(waitSec / 60)} мин.`
+    });
+  }
+
   const { pin } = req.body;
   if (!pin) {
     return res.status(400).json({ success: false, error: 'PIN is required' });
   }
-  if (String(pin).trim() === String(ADMIN_PIN).trim()) {
+
+  if (timingSafeCompare(pin, ADMIN_PIN)) {
+    recordSuccessfulLogin(ip);
     const token = Buffer.from(`${Date.now()}_${Math.random()}`).toString('base64');
     activeSessions.add(token);
     setTimeout(() => activeSessions.delete(token), 3600000); // 1 hour token lifetime
-    return res.json({ success: true, token });
+    return res.json({
+      success: true,
+      token,
+      mqtt: {
+        username: MQTT_WEB_USER,
+        password: MQTT_WEB_PASSWORD
+      }
+    });
   }
-  return res.status(401).json({ success: false, error: 'Invalid PIN' });
+
+  recordFailedLogin(ip);
+  // Artificial 500ms delay to thwart rapid-fire automated brute force
+  setTimeout(() => {
+    const attemptsLeft = 5 - ((loginAttempts.get(ip)?.count) || 0);
+    return res.status(401).json({
+      success: false,
+      error: attemptsLeft > 0 ? `Неверный PIN-код. Осталось попыток: ${attemptsLeft}` : 'Неверный PIN-код. Превышен лимит попыток: доступ заблокирован на 15 минут.'
+    });
+  }, 500);
 });
 
 // Authentication Guard Middleware
 function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
-  const token = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null;
+  const queryToken = req.query ? req.query.token : null;
+  const token = (authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null) || queryToken;
   if (!token || !activeSessions.has(token)) {
     return res.status(401).json({ success: false, error: 'Unauthorized: valid PIN session token required' });
   }
   next();
 }
+
+// Telemetry & Images Access Guard
+function requireTelemetryAuth(req, res, next) {
+  if (PUBLIC_TELEMETRY) return next();
+  return requireAuth(req, res, next);
+}
+
+// Check current session status and telemetry permissions
+app.get('/api/auth/session', (req, res) => {
+  const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
+  const queryToken = req.query ? req.query.token : null;
+  const token = (authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null) || queryToken;
+  const isValid = token && activeSessions.has(token);
+
+  if (isValid) {
+    return res.json({
+      authenticated: true,
+      public_telemetry: PUBLIC_TELEMETRY,
+      mqtt: {
+        username: MQTT_WEB_USER,
+        password: MQTT_WEB_PASSWORD
+      }
+    });
+  }
+
+  if (PUBLIC_TELEMETRY) {
+    return res.json({
+      authenticated: false,
+      public_telemetry: true,
+      mqtt: {
+        username: MQTT_WEB_USER,
+        password: MQTT_WEB_PASSWORD
+      }
+    });
+  }
+
+  return res.json({
+    authenticated: false,
+    public_telemetry: false
+  });
+});
 
 // Relay Control REST API (Requires valid PIN session)
 app.post('/api/relay', requireAuth, (req, res) => {
@@ -232,7 +342,7 @@ app.post('/api/relay', requireAuth, (req, res) => {
 });
 
 // Climate Controller REST API
-app.get('/api/climate', (req, res) => {
+app.get('/api/climate', requireTelemetryAuth, (req, res) => {
   res.json(climate.getState());
 });
 
@@ -269,7 +379,7 @@ app.post('/api/capture', requireAuth, (req, res) => {
   res.json({ status: 'capture_triggered' });
 });
 
-app.get('/api/images', (req, res) => {
+app.get('/api/images', requireTelemetryAuth, (req, res) => {
   fs.readdir(IMAGES_DIR, (err, files) => {
     if (err) {
       console.error(`[${new Date().toISOString()}] Error reading images directory:`, err);
@@ -280,7 +390,7 @@ app.get('/api/images', (req, res) => {
   });
 });
 
-app.get('/api/images/:filename', (req, res) => {
+app.get('/api/images/:filename', requireTelemetryAuth, (req, res) => {
   const filepath = path.join(IMAGES_DIR, req.params.filename);
   if (fs.existsSync(filepath)) {
     res.sendFile(path.resolve(filepath));
@@ -289,7 +399,7 @@ app.get('/api/images/:filename', (req, res) => {
   }
 });
 
-app.get('/api/latest-image', (req, res) => {
+app.get('/api/latest-image', requireTelemetryAuth, (req, res) => {
   fs.readdir(IMAGES_DIR, (err, files) => {
     if (err) {
       console.error(`[${new Date().toISOString()}] Error reading images directory:`, err);

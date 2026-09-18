@@ -40,6 +40,6 @@ jobs:
         run: |
           arduino-cli compile \
             --fqbn esp32:esp32:adafruit_matrixportal_esp32s3 \
-            --libraries libraries/ESP32_USB_STREAM \
+            --libraries libraries \
             --warnings default \
             growbox/growbox.ino

@@ -25,18 +25,22 @@ fi
 
 # 2. Setup .env file
 if [ ! -f .env ]; then
-    echo "[+] Creating .env from .env.example..."
+    echo "[+] Creating .env from .env.example with generated secrets..."
     cp .env.example .env
+    if command -v openssl &> /dev/null; then
+        ESP_PASS=$(openssl rand -hex 16)
+        BRIDGE_PASS=$(openssl rand -hex 16)
+        WEB_PASS=$(openssl rand -hex 16)
+        INFLUX_TOKEN=$(openssl rand -hex 24)
+        sed -i "s/MQTT_ESP32_PASSWORD=change_this_esp32_secret/MQTT_ESP32_PASSWORD=$ESP_PASS/" .env
+        sed -i "s/MQTT_BRIDGE_PASSWORD=change_this_bridge_secret/MQTT_BRIDGE_PASSWORD=$BRIDGE_PASS/" .env
+        sed -i "s/MQTT_WEB_PASSWORD=change_this_web_secret/MQTT_WEB_PASSWORD=$WEB_PASS/" .env
+        sed -i "s/INFLUXDB_TOKEN=generate_a_secure_random_token_here/INFLUXDB_TOKEN=$INFLUX_TOKEN/" .env
+        echo "[+] Random MQTT and InfluxDB secrets generated in .env"
+    fi
 fi
 
-# 3. Setup Mosquitto credentials
-if [ ! -f mosquitto/passwords.txt ]; then
-    echo "[+] Initializing mosquitto/passwords.txt from example..."
-    cp mosquitto/passwords.txt.example mosquitto/passwords.txt
-    chmod 644 mosquitto/passwords.txt
-fi
-
-# 4. Create runtime directories
+# 3. Create runtime directories
 mkdir -p bridge/images
 chmod 777 bridge/images
 
