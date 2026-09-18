@@ -18,9 +18,6 @@ unsigned long last_status_time = 0;
 
 void logMsg(const String &msg) {
   Serial.println(msg);
-  Serial0.println(msg);
-  printf("%s\n", msg.c_str());
-  fflush(stdout);
 }
 
 bool setup_wifi() {
@@ -32,10 +29,8 @@ bool setup_wifi() {
   while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
     delay(500);
     Serial.print(".");
-    Serial0.print(".");
   }
   Serial.println();
-  Serial0.println();
 
   if (WiFi.status() == WL_CONNECTED) {
     logMsg("[WIFI OK] Connected! IP: " + WiFi.localIP().toString() + " RSSI: " + String(WiFi.RSSI()) + " dBm");
@@ -48,7 +43,6 @@ bool setup_wifi() {
 
 void setup() {
   Serial.begin(115200);
-  Serial0.begin(115200);
   delay(1500);
 
   logMsg("\n========================================");
