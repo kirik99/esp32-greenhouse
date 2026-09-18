@@ -387,8 +387,12 @@
       container.appendChild(card);
     });
 
-    // MQTT Connection
-    const client = mqtt.connect(wsUrl);
+    // MQTT Connection (Strictly Read-Only Client for Telemetry & Status Streaming)
+    const client = mqtt.connect(wsUrl, {
+      username: 'growbox_web',
+      password: 'growbox_web_secret',
+      clientId: 'growbox_web_' + Math.random().toString(16).slice(2, 8)
+    });
 
     client.on('connect', () => {
       const dot = document.getElementById('statusDot');
@@ -607,7 +611,10 @@
 
         fetch(apiBase + '/api/climate/mode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
           body: JSON.stringify({ mode: stage })
         })
         .then(r => r.json())
@@ -680,7 +687,27 @@
         if (newState) card.classList.add('relay-active');
         else card.classList.remove('relay-active');
 
-        client.publish('growbox/relay/set', JSON.stringify({ relay: id, state: newState }));
+        fetch(apiBase + '/api/relay', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: JSON.stringify({ relay: id, state: newState })
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (!data || !data.success) {
+            console.warn('Relay command rejected:', data);
+            if (currentState) card.classList.add('relay-active');
+            else card.classList.remove('relay-active');
+          }
+        })
+        .catch(err => {
+          console.error('Failed to toggle relay via API:', err);
+          if (currentState) card.classList.add('relay-active');
+          else card.classList.remove('relay-active');
+        });
       });
     }
 
@@ -691,13 +718,14 @@
         btn.disabled = true;
         text.innerText = 'Захват кадра...';
 
-        try {
-          client.publish('growbox/camera/capture', '1');
-        } catch (e) {
-          console.warn('MQTT publish error:', e);
-        }
-
-        fetch(apiBase + '/api/capture', { method: 'POST' }).catch((err) => {
+        fetch(apiBase + '/api/capture', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + sessionToken
+          }
+        })
+        .then(r => r.json())
+        .catch((err) => {
           console.warn('REST capture error:', err);
         });
 

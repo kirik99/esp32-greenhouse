@@ -4,11 +4,11 @@ services:
     container_name: growbox_mosquitto
     ports:
       - "1883:1883"
-      - "8883:8883"
       - "127.0.0.1:9001:9001"
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
-      - ./mosquitto/certs:/mosquitto/certs:ro
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl.conf:/mosquitto/config/acl.conf:ro
+      - ./mosquitto/passwords.txt:/mosquitto/config/passwords.txt:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     restart: unless-stopped
@@ -37,6 +37,8 @@ services:
     environment:
       - MQTT_HOST=mosquitto
       - MQTT_PORT=1883
+      - MQTT_USER=${MQTT_BRIDGE_USER:-growbox_bridge}
+      - MQTT_PASSWORD=${MQTT_BRIDGE_PASSWORD:-growbox_bridge_secret}
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-growbox-super-secret-token}
       - INFLUXDB_ORG=${INFLUXDB_ORG:-growbox}

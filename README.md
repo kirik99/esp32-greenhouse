@@ -116,22 +116,29 @@
 
 ## 🚀 Быстрый старт
 
-### 1. Необходимые Arduino-библиотеки
+### 1. Требования к среде разработки и библиотеки
+
+> [!IMPORTANT]
+> **Обязательно требуется Arduino-ESP32 Core 3.x (ESP-IDF 5.x), рекомендована версия 3.2.1+!**
+> Прошивка использует вложенную конфигурационную структуру сетевого стека `esp-mqtt` (`mqtt_cfg.broker.address.*`, `mqtt_cfg.credentials.authentication.*`), появившуюся в ESP-IDF 5.x. На устаревшем ядре 2.x (ESP-IDF 4.4) сборка завершится ошибкой. В прошивку встроен препроцессорный барьер `#error`, проверяющий версию при компиляции.
+>
+> В **Arduino IDE** -> **Boards Manager** убедитесь, что пакет `esp32` обновлен до версии **3.2.1**.
+
 Установите через **Arduino IDE Library Manager** (`Ctrl+Shift+I`):
 * **Adafruit BME280 Library** (автоматически предложит установить `Adafruit Unified Sensor` и `Adafruit BusIO`);
 * **OneWire** (by Paul Stoffregen);
 * **DallasTemperature** (by Miles Burton);
 * **ArduinoJson** (v6 или v7, by Benoit Blanchon);
-* **ESP32_USB_STREAM** (уже находится в `libraries/ESP32_USB_STREAM` репозитория).
+* **ESP32_USB_STREAM** — библиотека для UVC USB-камеры теперь отслеживается напрямую в репозитории в каталоге `libraries/ESP32_USB_STREAM`.
 
 > [!NOTE]
-> Встроенный в ядро ESP32 сетевой стек **esp-mqtt** используется напрямую. Сторонняя библиотека `PubSubClient` больше не требуется, что исключает ограничения по размеру буфера и обеспечивает нативную поддержку WebSocket и TLS.
+> **Неблокирующая отправка снимков (FreeRTOS Core 0):** Кодирование кадра в Base64 и отправка большого сетевого пакета (~50-60 КБ) вынесены в отдельную низкоприоритетную фоновую задачу FreeRTOS на Core 0 с изолированным буфером снимка в PSRAM. Основной цикл `loop()` на Core 1 ни на миллисекунду не блокируется, гарантируя непрерывное выполнение 2-секундных проверок аварийных защит (`check_safety_failsafes()`).
 
 ### 2. Конфигурация подключения (`growbox/wifi_config.h`)
 
 Создайте файл `growbox/wifi_config.h` (скопировав шаблон из `growbox/wifi_config.example.h`):
 
-#### Вариант А: Боевой профиль (WSS через интернет на порт 443)
+#### Вариант А: Боевой профиль (WSS через интернет на порт 443 с авторизацией)
 ```cpp
 #define WIFI_SSID     "Ваш_WiFi"
 #define WIFI_PASSWORD "Ваш_Пароль"
@@ -139,13 +146,14 @@
 #define MQTT_HOST     "growbox.weird.cyou"
 #define MQTT_PORT     443
 #define MQTT_PATH     "/mqtt"
-#define MQTT_USER     "mqtt_user"
-#define MQTT_PASS     "mqtt_pass"
+#define MQTT_USER     "growbox_esp32"
+#define MQTT_PASS     "growbox_esp32_secret"
 
 #define USE_MQTT_WEBSOCKETS     true   // Включает WebSocket транспорт (WSS)
 #define USE_MQTT_TLS            true   // Включает шифрование TLS
 #define MQTT_ALLOW_INSECURE_TLS false  // Строгая проверка сертификатов через CA bundle
 ```
+
 
 #### Вариант Б: Локальный профиль разработки (TCP порт 1883)
 ```cpp
@@ -212,22 +220,44 @@
    ```
 3. **Откройте порты в фаерволе (UFW):**
    ```bash
-   sudo ufw allow 80/tcp     # Панель управления и API
-   sudo ufw allow 1883/tcp   # MQTT брокер для ESP32 (без TLS)
-   sudo ufw allow 8883/tcp   # MQTTS брокер для ESP32 (с TLS)
+   sudo ufw allow 80/tcp     # Панель управления, REST API и HTTP-редирект
+   sudo ufw allow 443/tcp    # HTTPS веб-дашборд и WSS (MQTT over WebSocket)
    ```
 
-Все переменные (пароли к InfluxDB, часовой пояс `TZ=Europe/Moscow`) настраиваются в файле `server/.env`.
+> [!CAUTION]
+> **Порты брокера Mosquitto (1883 и 9001) НЕ открываются наружу!**
+> Все внешние сетевые подключения (микроконтроллер ESP32 и веб-дашборд) работают строго через защищенный WSS-маршрут (`wss://ваш-домен/mqtt`) на порту **443**. Порт `1883` доступен только внутри Docker-сети для сервиса моста `growbox_bridge` (и опционально в доверенной домашней LAN). Порт `8883` полностью упразднен.
+
+Все переменные (пароли к InfluxDB, PIN администратора, часовой пояс `TZ=Europe/Moscow`) настраиваются в файле `server/.env`.
 
 ---
 
-## 🔐 Безопасность и PIN-авторизация в веб-интерфейсе
+## 🔐 Модель безопасности и Mosquitto ACL
 
-Панель управления защищена PIN-кодом:
-* **PIN по умолчанию:** `2212` (константа `ADMIN_PIN` в `server/index.html`).
-* **Защищённые действия:** переключение реле и ручной снимок с камеры.
-* **Сессия администратора:** активна 15 минут, после чего панель блокируется автоматически.
-* В верхней панели отображается статус доступа и оставшееся время сессии.
+В системе реализовано строгое разграничение прав доступа и полный запрет анонимного MQTT (`allow_anonymous false`):
+
+1. **Роли и права доступа (Mosquitto ACL):**
+   * **`growbox_esp32`:**
+     * Публикация (`write`): `growbox/sensors`, `growbox/status`, `growbox/image/raw`
+     * Подписка (`read`): `growbox/relay/set`, `growbox/camera/capture`, `growbox/co2/calibrate`
+   * **`growbox_bridge`:**
+     * Публикация (`write`): `growbox/relay/set`, `growbox/camera/capture`, `growbox/co2/calibrate`, `growbox/controller/state`
+     * Подписка (`read`): `growbox/sensors`, `growbox/status`, `growbox/image/raw`
+   * **`growbox_web` (Веб-клиент дашборда):**
+     * **Строго READ-ONLY**: подписка на телеметрию и статус (`growbox/sensors`, `growbox/status`, `growbox/controller/state`, `growbox/image/raw`).
+     * Любые попытки несанкционированной публикации в топики управления с веб-клиента блокируются на уровне брокера Mosquitto.
+
+2. **Защита управления реле через REST API:**
+   * Управление силовыми реле и принудительный снимок выполняются через аутентифицированный REST API сервера (`POST /api/relay`, `POST /api/capture`).
+   * REST API защищено PIN-кодом (по умолчанию `2212`) с выдачей сессионного токена (`Authorization: Bearer <token>`) на 15 минут.
+   * Прямая публикация команд реле из браузера в MQTT полностью исключена.
+
+3. **Управление паролями Mosquitto:**
+   * Пароли хранятся в формате `sha512-pbkdf2` в `server/mosquitto/passwords.txt` (файл в `.gitignore`).
+   * Для генерации или смены паролей используется утилита `mosquitto_passwd`:
+     ```bash
+     docker exec -it growbox_mosquitto mosquitto_passwd -b /mosquitto/config/passwords.txt <пользователь> <новый_пароль>
+     ```
 
 ---
 

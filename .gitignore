@@ -20,8 +20,9 @@ wifi_config.h
 camera_work/
 st4_DS18B20/
 
-# Arduino libraries (install via Arduino IDE Library Manager)
-libraries/
+# Arduino libraries (install via Arduino IDE Library Manager, except vendor USB stream)
+libraries/*
+!libraries/ESP32_USB_STREAM/
 
 # Python cache
 __pycache__/

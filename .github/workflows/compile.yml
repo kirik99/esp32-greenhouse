@@ -1,0 +1,45 @@
+name: Compile ESP32 Firmware
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  compile:
+    name: Build Adafruit MatrixPortal ESP32-S3 Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v1.1.2
+
+      - name: Install ESP32 Core (Arduino-ESP32 3.2.1 / ESP-IDF 5.x)
+        run: |
+          arduino-cli config init
+          arduino-cli config set board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.2.1
+
+      - name: Install Required Arduino Libraries
+        run: |
+          arduino-cli lib install "Adafruit BME280 Library"
+          arduino-cli lib install "DallasTemperature"
+          arduino-cli lib install "OneWire"
+          arduino-cli lib install "ArduinoJson"
+
+      - name: Setup Wi-Fi and MQTT Configuration
+        run: |
+          cp growbox/wifi_config.example.h growbox/wifi_config.h
+
+      - name: Compile Sketch
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:adafruit_matrixportal_esp32s3 \
+            --libraries libraries/ESP32_USB_STREAM \
+            --warnings default \
+            growbox/growbox.ino

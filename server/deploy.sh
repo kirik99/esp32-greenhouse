@@ -29,7 +29,14 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# 3. Create runtime directories
+# 3. Setup Mosquitto credentials
+if [ ! -f mosquitto/passwords.txt ]; then
+    echo "[+] Initializing mosquitto/passwords.txt from example..."
+    cp mosquitto/passwords.txt.example mosquitto/passwords.txt
+    chmod 644 mosquitto/passwords.txt
+fi
+
+# 4. Create runtime directories
 mkdir -p bridge/images
 chmod 777 bridge/images
 

@@ -11,6 +11,8 @@ const { ClimateController } = require('./automation');
 // Configuration
 const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
 const MQTT_PORT = process.env.MQTT_PORT || 1883;
+const MQTT_USER = process.env.MQTT_USER || 'growbox_bridge';
+const MQTT_PASSWORD = process.env.MQTT_PASSWORD || 'growbox_bridge_secret';
 const INFLUXDB_URL = process.env.INFLUXDB_URL || 'http://localhost:8086';
 const INFLUXDB_TOKEN = process.env.INFLUXDB_TOKEN || 'growbox-super-secret-token';
 const INFLUXDB_ORG = process.env.INFLUXDB_ORG || 'growbox';
@@ -28,8 +30,12 @@ const influxDB = new InfluxDB({ url: INFLUXDB_URL, token: INFLUXDB_TOKEN });
 const writeApi = influxDB.getWriteApi(INFLUXDB_ORG, INFLUXDB_BUCKET);
 writeApi.useDefaultTags({ location: 'growbox' });
 
-// MQTT Setup
-const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`);
+// MQTT Setup with Authentication
+const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
+  username: MQTT_USER,
+  password: MQTT_PASSWORD,
+  clientId: `growbox_bridge_${Math.random().toString(16).slice(2, 8)}`
+});
 
 // Climate Controller State Machine
 const climate = new ClimateController(mqttClient);
@@ -203,12 +209,34 @@ app.post('/api/auth/verify', (req, res) => {
   return res.status(401).json({ success: false, error: 'Invalid PIN' });
 });
 
+// Authentication Guard Middleware
+function requireAuth(req, res, next) {
+  const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
+  const token = authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null;
+  if (!token || !activeSessions.has(token)) {
+    return res.status(401).json({ success: false, error: 'Unauthorized: valid PIN session token required' });
+  }
+  next();
+}
+
+// Relay Control REST API (Requires valid PIN session)
+app.post('/api/relay', requireAuth, (req, res) => {
+  const { relay, state } = req.body;
+  if (typeof relay !== 'number' || typeof state !== 'boolean' || relay < 1 || relay > 6) {
+    return res.status(400).json({ success: false, error: 'Invalid relay (1-6) or state (boolean)' });
+  }
+  const payload = JSON.stringify({ relay, state });
+  mqttClient.publish('growbox/relay/set', payload);
+  console.log(`[${new Date().toISOString()}] Relay ${relay} set to ${state} via authenticated REST API`);
+  res.json({ success: true, relay, state });
+});
+
 // Climate Controller REST API
 app.get('/api/climate', (req, res) => {
   res.json(climate.getState());
 });
 
-app.post('/api/climate/mode', (req, res) => {
+app.post('/api/climate/mode', requireAuth, (req, res) => {
   try {
     const { mode } = req.body;
     if (!mode) return res.status(400).json({ error: 'Missing mode parameter' });
@@ -219,7 +247,7 @@ app.post('/api/climate/mode', (req, res) => {
   }
 });
 
-app.post('/api/climate/setpoints', (req, res) => {
+app.post('/api/climate/setpoints', requireAuth, (req, res) => {
   try {
     const { mode, setpoints } = req.body;
     if (!mode || !setpoints) return res.status(400).json({ error: 'Missing mode or setpoints parameter' });
@@ -234,8 +262,8 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', climate_mode: climate.mode });
 });
 
-// Ручка для принудительного снимка с камеры
-app.all('/api/capture', (req, res) => {
+// Ручка для принудительного снимка с камеры (требует авторизации)
+app.post('/api/capture', requireAuth, (req, res) => {
   mqttClient.publish('growbox/camera/capture', '1');
   console.log(`[${new Date().toISOString()}] Triggered on-demand camera capture via /api/capture`);
   res.json({ status: 'capture_triggered' });

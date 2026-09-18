@@ -14,4 +14,6 @@ influxdb_data/
 influxdb_config/
 mosquitto_data/
 mosquitto_log/
+mosquitto/passwords.txt
+!mosquitto/passwords.txt.example
 
