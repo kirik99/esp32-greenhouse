@@ -57,10 +57,8 @@ services:
     container_name: growbox_dashboard
     ports:
       - "${WEB_PORT:-80}:80"
-      - "${SSL_PORT:-443}:443"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
       - ./index.html:/usr/share/nginx/html/index.html:ro
     depends_on:
       - bridge
