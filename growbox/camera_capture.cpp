@@ -1,5 +1,5 @@
 #include "camera_capture.h"
-#include "mqtt_client.h"
+#include "mqtt_transport.h"
 #include "config.h"
 #include "USB_STREAM.h"
 

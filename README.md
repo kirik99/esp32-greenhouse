@@ -34,27 +34,33 @@
   * Управление реле с обратной связью (интерактивные тумблеры-слайдеры);
   * Видоискатель камеры со снимками по требованию и галереей архива;
   * Непрерывное логирование телеметрии в базу данных временных рядов **InfluxDB 2.7**;
-  * Обмен данными по легковесному протоколу **MQTT / MQTTS (TLS порт 8883)**.
+  * Обмен данными по протоколу **MQTT over Secure WebSocket (WSS порт 443)** с валидацией TLS-сертификатов через системный CA-bundle, либо локальный **MQTT (TCP порт 1883)**.
 
 ---
 
 ## 🏗 Архитектура системы
 
 ```
-                +------------------------------------+
-                |    Adafruit MatrixPortal ESP32-S3   |
-                |  (BME280, DS18B20, MH-Z19B, Cam)   |
-                +-----------------+------------------+
-                                  |
-                   Wi-Fi / MQTT   | (Порт 1883 или 8883 MQTTS)
-                                  v
+                 +------------------------------------+
+                 |    Adafruit MatrixPortal ESP32-S3   |
+                 |  (BME280, DS18B20, MH-Z19B, Cam)   |
+                 +-----------------+------------------+
+                                   |
+         Внешний доступ: WSS (:443)|  Локальная разработка: TCP (:1883)
+         wss://domain/mqtt         |
+                                   v
 +------------------------------------------------------------------------+
+|               Reverse Proxy (Nginx / Nginx Proxy Manager :443)         |
+|             Завершение TLS, проксирование /mqtt -> mosquitto:9001      |
++----------------------------------+---------------------+---------------+
+                                   |
++----------------------------------v-------------------------------------+
 |                             DOCKER SERVER                              |
 |                                                                        |
 |  +------------------------+             +---------------------------+  |
 |  |   growbox_mosquitto    | <---------> |      growbox_bridge       |  |
-|  |   (MQTT/MQTTS :1883/   |             |  (Node.js REST & Worker)  |  |
-|  |    :8883 TLS)          |             +------+-------------+------+  |
+|  |   (:1883 TCP LAN /     |             |  (Node.js REST & Worker)  |  |
+|  |    :9001 WebSockets)   |             +------+-------------+------+  |
 |  +-----------+------------+             +------+             |         |
 |              ^                                 |             |         |
 |   WebSockets |                                 v             v         |
@@ -64,11 +70,11 @@
 |              |                         +-----------+   +------------+  |
 |              v                                               |         |
 |  +-----------------------------------------------------------+------+  |
-|  |                      growbox_dashboard (Nginx :80)               |  |
+|  |                      growbox_dashboard (Nginx :80/:443)          |  |
 |  |                                                                  |  |
-|  |  /      -> Веб-интерфейс (index.html + PIN 2212 Auth)            |  |
-|  |  /api/* -> Прокси в bridge:3001 (Снимки и ручное управление)     |  |
-|  |  /mqtt  -> Прокси в mosquitto:9001 (WebSockets для браузера)     |  |
+|  |  /      -> Веб-интерфейс (index.html + Server PIN Auth)          |  |
+|  |  /api/* -> Прокси в bridge:3001 (Климат, снимки, управление)     |  |
+|  |  /mqtt  -> Прокси в mosquitto:9001 (WebSockets для дашборда)    |  |
 |  +----------------------------------+-------------------------------+  |
 +-------------------------------------|----------------------------------+
                                       v
@@ -110,32 +116,85 @@
 
 ## 🚀 Быстрый старт
 
-### 1. Прошивка микроконтроллера ESP32 (`growbox/`)
+### 1. Необходимые Arduino-библиотеки
+Установите через **Arduino IDE Library Manager** (`Ctrl+Shift+I`):
+* **Adafruit BME280 Library** (автоматически предложит установить `Adafruit Unified Sensor` и `Adafruit BusIO`);
+* **OneWire** (by Paul Stoffregen);
+* **DallasTemperature** (by Miles Burton);
+* **ArduinoJson** (v6 или v7, by Benoit Blanchon);
+* **ESP32_USB_STREAM** (уже находится в `libraries/ESP32_USB_STREAM` репозитория).
+
+> [!NOTE]
+> Встроенный в ядро ESP32 сетевой стек **esp-mqtt** используется напрямую. Сторонняя библиотека `PubSubClient` больше не требуется, что исключает ограничения по размеру буфера и обеспечивает нативную поддержку WebSocket и TLS.
+
+### 2. Конфигурация подключения (`growbox/wifi_config.h`)
+
+Создайте файл `growbox/wifi_config.h` (скопировав шаблон из `growbox/wifi_config.example.h`):
+
+#### Вариант А: Боевой профиль (WSS через интернет на порт 443)
+```cpp
+#define WIFI_SSID     "Ваш_WiFi"
+#define WIFI_PASSWORD "Ваш_Пароль"
+
+#define MQTT_HOST     "growbox.weird.cyou"
+#define MQTT_PORT     443
+#define MQTT_PATH     "/mqtt"
+#define MQTT_USER     "mqtt_user"
+#define MQTT_PASS     "mqtt_pass"
+
+#define USE_MQTT_WEBSOCKETS     true   // Включает WebSocket транспорт (WSS)
+#define USE_MQTT_TLS            true   // Включает шифрование TLS
+#define MQTT_ALLOW_INSECURE_TLS false  // Строгая проверка сертификатов через CA bundle
+```
+
+#### Вариант Б: Локальный профиль разработки (TCP порт 1883)
+```cpp
+#define WIFI_SSID     "Ваш_WiFi"
+#define WIFI_PASSWORD "Ваш_Пароль"
+
+#define MQTT_HOST     "192.168.1.118"
+#define MQTT_PORT     1883
+#define MQTT_PATH     "/mqtt"
+#define MQTT_USER     ""
+#define MQTT_PASS     ""
+
+#define USE_MQTT_WEBSOCKETS     false  // Прямой TCP транспорт
+#define USE_MQTT_TLS            false  // Без шифрования для локальной сети
+#define MQTT_ALLOW_INSECURE_TLS false
+```
+
+### 3. Прошивка микроконтроллера ESP32-S3
 
 1. Откройте скетч `growbox/growbox.ino` в **Arduino IDE**.
-2. Создайте файл `growbox/wifi_config.h` (скопировав `growbox/wifi_config.example.h`) и укажите ваши данные:
-   ```cpp
-   #define WIFI_SSID     "Ваш_WiFi"
-   #define WIFI_PASSWORD "Ваш_Пароль"
-   #define MQTT_HOST     "IP_вашего_ПК_или_VPS"
-   #define MQTT_PORT     1883
-   #define USE_MQTTS     0
-   ```
-3. В настройках Arduino IDE выберите:
-   * **Плата:** `Adafruit MatrixPortal ESP32-S3`
-   * **PSRAM:** `QSPI PSRAM` *(Плата MatrixPortal S3 оснащена 2MB QSPI PSRAM)*
-   * **Порт:** Ваш COM-порт
-4. Нажмите **Upload** (Загрузить).
+2. В меню **Tools (Инструменты)** выберите параметры:
+   * **Board:** `Adafruit MatrixPortal ESP32-S3`
+   * **PSRAM:** `QSPI PSRAM` *(Плата оснащена 2MB QSPI PSRAM)*
+   * **Port:** COM-порт вашей платы
+3. Нажмите кнопку **Upload** (Загрузить).
 
-### 2. Запуск сервера локально (Docker Desktop / WSL)
+### 4. Проверка работы через Serial Monitor
+Откройте **Serial Monitor** на скорости **115200 бод**. Штатный лог успешного запуска выглядит так:
+```text
+========================================
+        GROWBOX FIRMWARE STARTING
+========================================
+[RELAY] Relays initialized (all OFF)
+[SENSORS] BME280 initialized on GPIO 16/17
+[SENSORS] DS18B20 detected on GPIO 12!
+[SENSORS] MH-Z19B ABC (Auto-Calibration) disabled for mushroom cultivation.
+[WIFI] Connecting to YourWiFi...
+[WIFI OK] Connected! IP: 192.168.1.45 RSSI: -58 dBm
+[TIME] Synchronizing system time via NTP for TLS certificate validation...
+[TIME OK] Synchronized UTC time: 2026-09-18 13:05:22 UTC (epoch: 1789736722)
+[MQTT] Configuring wss://growbox.weird.cyou:443/mqtt (Client ID: GrowboxESP32_34B7DA)
+[MQTT] Secure TLS mode: Verifying server certificate using ESP CRT bundle.
+[MQTT OK] Client background service started.
+[CAMERA OK] USB Stream started, waiting for frames...
+[SYSTEM] Setup complete, entering main loop
 
-В папке `server/`:
-```bash
-docker compose up -d
+[MQTT OK] Connected to broker!
+[MQTT] Subscribed to control topics (IDs: 1, 2, 3)
 ```
-После запуска откройте в браузере:
-* **Дашборд управления:** [http://localhost](http://localhost) (или с телефона по IP компьютера: `http://192.168.x.x`)
-* **База данных InfluxDB UI:** [http://localhost:8086](http://localhost:8086) *(логин `admin`, пароль `adminpassword`)*
 
 ---
 
@@ -211,9 +270,10 @@ ESP32 автономно проверяет показатели каждые 2 
 |---|---|---|---|
 | `growbox/sensors` | ESP32 → Брокер | JSON | `air_temp`, `humidity`, `pressure`, `substrate_temp`, `co2_ppm` (каждые 30 с) |
 | `growbox/status` | ESP32 → Брокер | JSON | `relays`, `alarm`, `heater_locked`, `uptime_s`, `wifi_rssi`, `free_heap` |
-| `growbox/image/raw` | ESP32 → Брокер | Base64 / JSON | Кадр 160×120 YUY2 каждые 10 мин или по кнопке |
+| `growbox/image/raw` | ESP32 → Брокер | Base64 / JSON | Кадр 160×120 YUY2 каждые 10 мин или по требованию |
 | `growbox/relay/set` | Брокер → ESP32 | `{"relay": 1..6, "state": true/false}` | Переключение реле (с проверкой блокировок) |
-| `growbox/camera/capture` | Брокер → ESP32 | `1` | Команда сделать принудительный снимок |
+| `growbox/camera/capture` | Брокер → ESP32 | Любое значение / пустой | Команда сделать принудительный снимок |
+| `growbox/co2/calibrate` | Брокер → ESP32 | Любое значение / пустой | Программная калибровка ноля (400 ppm) для MH-Z19B |
 
 ---
 
@@ -223,11 +283,11 @@ ESP32 автономно проверяет показатели каждые 2 
 ├── growbox/                     # Основная боевая прошивка ESP32-S3
 │   ├── growbox.ino              # Главный цикл программы и инициализация
 │   ├── config.h                 # Пины, интервалы опроса, константы
-│   ├── wifi_config.example.h    # Пример конфигурации Wi-Fi и MQTT
+│   ├── wifi_config.example.h    # Пример конфигурации Wi-Fi и MQTT (WSS / TCP)
 │   ├── sensors.cpp / .h         # Драйверы BME280, DS18B20, MH-Z19B
 │   ├── relay.cpp / .h           # Управление 6 LOW-активными реле
 │   ├── camera_capture.cpp / .h  # Драйвер UVC камеры на ESP32_USB_STREAM
-│   └── mqtt_client.cpp / .h     # Клиент PubSubClient, подписки и публикации
+│   └── mqtt_transport.cpp / .h  # Транспорт esp-mqtt (WSS 443, TLS CA bundle, TCP 1883)
 ├── server/                      # Серверная Docker-инфраструктура
 │   ├── docker-compose.yml       # Конфигурация 4 сервисов
 │   ├── deploy.sh                # Скрипт авторазвертывания на Linux VPS

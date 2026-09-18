@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Wire.h>
-#include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <Adafruit_BME280.h>
 #include <OneWire.h>
@@ -11,7 +10,7 @@
 #include "config.h"
 #include "relay.h"
 #include "sensors.h"
-#include "mqtt_client.h"
+#include "mqtt_transport.h"
 #include "camera_capture.h"
 
 unsigned long last_sensor_time = 0;
