@@ -96,6 +96,11 @@
 
 > [!IMPORTANT]
 > **Внимание:** В ранних черновиках BME280 ошибочно назначался на GPIO 6/7 (это аппаратные кнопки UP/DOWN на плате), а DS18B20 — на GPIO 4 (это встроенный NeoPixel). Новая схема выше полностью исключает аппаратные конфликты!
+> Прошивка умеет диагностировать эту ситуацию: она автоматически пробует шину I²C на **GPIO 16/17**, а если BME280 там не найден — на «старой» паре **GPIO 6/7**, и пишет в лог `BME280 answers on the LEGACY GPIO 6/7 pins`.
+
+> [!CAUTION]
+> **Питание MH-Z19B — только 5 В.** При 3.3 В ИК-лампа сенсора не запускается, UART полностью молчит, и в телеметрии будет `co2_ppm = -999` (`CO2: no_reply`).
+> Питание DS18B20: разъём **JST A0** по умолчанию выдаёт **5 В** (перемычку можно перепаять на 3 В) — сам датчик это допускает, но резистор подтяжки 4.7 кОм обязательно должен идти на **3.3 В**, а не на 5 В.
 
 ### 2. Модуль 6 реле (Слаботочная часть)
 
@@ -189,9 +194,10 @@
         GROWBOX FIRMWARE STARTING
 ========================================
 [RELAY] Relays initialized (all OFF)
-[SENSORS] BME280 initialized on GPIO 16/17
+[SENSORS] BME280 found at 0x77 (I2C SDA=16 SCL=17, bus devices: 0x19,0x77)
 [SENSORS] DS18B20 detected on GPIO 12!
-[SENSORS] MH-Z19B ABC (Auto-Calibration) disabled for mushroom cultivation.
+[SENSORS] MH-Z19B UART ready (RX=8, TX=18, 9600 baud). VIN must be 5V!
+[SENSORS] I2C bus SDA=16 SCL=17, devices: 0x19,0x77
 [WIFI] Connecting to YourWiFi...
 [WIFI OK] Connected! IP: 192.168.1.45 RSSI: -58 dBm
 [TIME] Synchronizing system time via NTP for TLS certificate validation...
@@ -201,10 +207,41 @@
 [MQTT OK] Client background service started.
 [CAMERA OK] USB Stream started, waiting for frames...
 [SYSTEM] Setup complete, entering main loop
+[SENSORS] MH-Z19B ABC (auto-calibration) disabled for mushroom cultivation.
 
 [MQTT OK] Connected to broker!
 [MQTT] Subscribed to control topics (IDs: 1, 2, 3)
+[DIAG] BME:OK; DS:OK(pin12=22.4C); CO2:812ppm
 ```
+
+> [!IMPORTANT]
+> В шине I²C на разъёме **STEMMA QT** уже сидит встроенный акселерометр **LIS3DH по адресу `0x19`**.
+> Поэтому запись `bus devices: 0x19,...` в логе означает, что **шина жива**, а BME280 просто не отвечает (`0x19` без `0x76/0x77`).
+> Если в логе `bus devices: none` — не работает сама шина (обрыв SDA/SCL, нет питания 3.3 В).
+
+---
+
+## 🧪 Если датчики показывают «--» (диагностика за 5 минут)
+
+Фирменная прошивка публикует в `growbox/sensors` не только значения, но и **причину отсутствия данных**
+(`bme_status`, `ds_status`, `co2_status`, `i2c_devices`, `diag`), а веб-панель показывает их в блоке
+**«Нет данных с датчиков»** под плитками телеметрии. Значение `-999` всегда означает «датчик не ответил».
+
+| Симптом в `diag` | Причина | Что делать |
+|---|---|---|
+| `BME280 ... WRONG_CHIP_ID` | На адресе `0x76`/`0x77` кто-то отвечает, но chip ID не `0x60` | Обычно это клон **BMP280** (в нём нет канала влажности). Заменить модуль на настоящий BME280 |
+| `BME280 ... OK_NO_HUMIDITY` | Температура и давление читаются, влажность `NAN` | Тот же случай: модуль без канала влажности. Температура/давление продолжат публиковаться |
+| `BME:not_found(i2c=0x19@16/17)` | Шина I²C жива (акселерометр отвечает), но BME280 не найден | Проверить, что BME280 вставлен в разъём **STEMMA QT** (SDA=GPIO16, SCL=GPIO17, 3.3 В). Некоторые модули имеют адрес `0x76`, некоторые `0x77` — прошивка пробует оба |
+| `BME:not_found(i2c=none@16/17)` | На шине нет вообще никого | Обрыв SDA/SCL, нет 3.3 В, либо модуль неисправен (внутренние подтяжки 10 кОм на модуле обязательны) |
+| `bme_status = OK_LEGACY_PINS` / лог `BME280 answers on the LEGACY GPIO 6/7 pins` | Датчик подключён по **старой** распиновке (`GPIO 6/7` = кнопки UP/DOWN) | Прошивка работает, но перенесите провода в STEMMA QT — GPIO 6/7 конфликтуют с кнопками платы |
+| `BME:read_error(x2+)` | Сбой чтения I²C (плохой контакт) | Прошивка сама пересобирает шину и повторно инициализирует датчик. Проверьте кабель STEMMA QT |
+| `DS:NoPulse(pin12,lvl=1)` | DS18B20 не отвечает | Проверить 4.7 кОм подтяжку DATA→3.3 В, питание, общий GND. Прошивка автоматически перебирает пины `12, 5, 13, 6, 7` |
+| `CO2:no_reply(check 5V VIN, sensor TX->GPIO8, sensor RX->GPIO18)` | MH-Z19B полностью молчит | **Питание VIN строго 5 В** (на 3.3 В ИК-лампа не запускается и UART молчит!). Затем: GND общий, `TX сенсора → GPIO8`, `RX сенсора → GPIO18`. Первые 1–3 минуты после включения — прогрев. **Внимание:** в старом скетче `stage5_CO2_sensor/esp32/` было ошибочно напечатано «VCC -> 3.3V» — это неверно |
+| `CO2:bad_checksum` | Ответ есть, но кадр побит | Помехи/плохой контакт на линии UART, либо TX/RX перепутаны частично |
+| `CO2:bad_frame` | Отвечает не MH-Z19B | На линии шумит другой UART/скетч, проверьте скорость 9600 и что порт не занят |
+
+Проверить датчик CO₂ отдельно от всего проекта можно скетчем
+**`stage5_CO2_sensor/esp32/co2_mhz19_esp32.ino`** — он печатает сырой HEX-ответ и проверяет контрольную сумму.
 
 ---
 
@@ -299,8 +336,8 @@ ESP32 автономно проверяет показатели каждые 2 
 
 | Топик | Направление | Формат данных | Описание |
 |---|---|---|---|
-| `growbox/sensors` | ESP32 → Брокер | JSON | `air_temp`, `humidity`, `pressure`, `substrate_temp`, `co2_ppm` (каждые 30 с) |
-| `growbox/status` | ESP32 → Брокер | JSON | `relays`, `alarm`, `heater_locked`, `uptime_s`, `wifi_rssi`, `free_heap` |
+| `growbox/sensors` | ESP32 → Брокер | JSON | `air_temp`, `humidity`, `pressure`, `substrate_temp`, `co2_ppm` (каждые 30 с). Флаги валидности: `air_temp_ok`, `humidity_ok`, `pressure_ok`, `substrate_temp_ok`, `co2_ok`. Диагностика: `bme_status`, `ds_status`, `co2_status`, `i2c_devices`, `i2c_sda`, `i2c_scl`, `diag`. Невалидные значения = `-999` |
+| `growbox/status` | ESP32 → Брокер | JSON | `relays`, `alarm`, `heater_locked`, `uptime_s`, `wifi_rssi`, `free_heap`, `diag` |
 | `growbox/image/raw` | ESP32 → Брокер | Base64 / JSON | Кадр 160×120 YUY2 каждые 10 мин или по требованию |
 | `growbox/relay/set` | Брокер → ESP32 | `{"relay": 1..6, "state": true/false}` | Переключение реле (с проверкой блокировок) |
 | `growbox/camera/capture` | Брокер → ESP32 | Любое значение / пустой | Команда сделать принудительный снимок |

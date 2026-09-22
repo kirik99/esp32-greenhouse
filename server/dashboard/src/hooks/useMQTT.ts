@@ -3,15 +3,33 @@ import mqtt, { MqttClient } from 'mqtt';
 import { MQTT_WS_URL } from '../config';
 
 interface SensorData {
-  temp: number;
-  hum: number;
-  co2: number;
-  pressure: number;
-  soil_temp: number;
+  temp?: number;
+  hum?: number;
+  co2?: number;
+  pressure?: number;
+  soil_temp?: number;
+  diag?: string;
+  online?: {
+    temp: boolean;
+    hum: boolean;
+    co2: boolean;
+    pressure: boolean;
+    soil_temp: boolean;
+  };
 }
 
 interface RelayState {
   [key: string]: boolean;
+}
+
+// The firmware reports "no data" as -999 (older builds may also send null/NaN).
+// Normalise everything to undefined so the UI can show '--' instead of a fake value.
+function num(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value !== -999 ? value : undefined;
+}
+
+function ok(flag: unknown, value: number | undefined): boolean {
+  return flag === undefined || flag === null ? value !== undefined : flag === true && value !== undefined;
 }
 
 export function useMQTT() {
@@ -48,12 +66,26 @@ export function useMQTT() {
       try {
         const payload = JSON.parse(message.toString());
         if (topic === 'growbox/sensors') {
+          const temp = num(payload.air_temp ?? payload.temp);
+          const hum = num(payload.humidity ?? payload.hum);
+          const co2 = num(payload.co2_ppm ?? payload.co2);
+          const pressure = num(payload.pressure);
+          const soil_temp = num(payload.substrate_temp ?? payload.soil_temp);
+
           setSensors({
-            temp: payload.air_temp ?? payload.temp,
-            hum: payload.humidity ?? payload.hum,
-            co2: payload.co2_ppm ?? payload.co2,
-            pressure: payload.pressure,
-            soil_temp: payload.substrate_temp ?? payload.soil_temp,
+            temp,
+            hum,
+            co2,
+            pressure,
+            soil_temp,
+            diag: typeof payload.diag === 'string' ? payload.diag : undefined,
+            online: {
+              temp: ok(payload.air_temp_ok, temp),
+              hum: ok(payload.humidity_ok, hum),
+              co2: ok(payload.co2_ok, co2),
+              pressure: ok(payload.pressure_ok, pressure),
+              soil_temp: ok(payload.substrate_temp_ok, soil_temp),
+            },
           });
         } else if (topic === 'growbox/status') {
           if (Array.isArray(payload.relays)) {

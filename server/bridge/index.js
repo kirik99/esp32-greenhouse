@@ -91,15 +91,51 @@ mqttClient.on('message', async (topic, message) => {
     if (topic === 'growbox/sensors') {
       const data = JSON.parse(message.toString());
       const point = new Point('sensor_data');
-      if (data.air_temp       !== undefined) point.floatField('air_temp',       data.air_temp);
-      if (data.humidity       !== undefined) point.floatField('humidity',        data.humidity);
-      if (data.pressure       !== undefined) point.floatField('pressure',        data.pressure);
-      if (data.substrate_temp !== undefined) point.floatField('substrate_temp',  data.substrate_temp);
-      if (data.co2_ppm        !== undefined) point.intField('co2_ppm',           data.co2_ppm);
-      
+
+      // The firmware reports "no data" as -999 (and may also send null/NaN).
+      // Writing that sentinel as a real measurement poisons the time series, so
+      // only valid channels are stored; offline ones are simply left out and
+      // counted in sensors_online.
+      const valid = (v) => typeof v === 'number' && Number.isFinite(v) && v !== -999;
+      const channels = [
+        ['air_temp', 'air_temp_ok', 'float'],
+        ['humidity', 'humidity_ok', 'float'],
+        ['pressure', 'pressure_ok', 'float'],
+        ['substrate_temp', 'substrate_temp_ok', 'float'],
+        ['co2_ppm', 'co2_ok', 'int']
+      ];
+
+      const offline = [];
+      let online = 0;
+
+      for (const [field, flag, kind] of channels) {
+        const value = data[field];
+        const ok = (data[flag] === undefined) ? valid(value) : (data[flag] === true && valid(value));
+        if (ok) {
+          if (kind === 'int') {
+            point.intField(field, Math.round(value));
+          } else {
+            point.floatField(field, value);
+          }
+          online++;
+        } else {
+          offline.push(field);
+        }
+      }
+
+      point.intField('sensors_online', online);
+      point.intField('sensors_total', channels.length);
+      if (data.i2c_devices) point.stringField('i2c_devices', String(data.i2c_devices));
+      if (data.diag) point.stringField('diag', String(data.diag).slice(0, 512));
+
       writeApi.writePoint(point);
-      console.log(`[${new Date().toISOString()}] Sensor data written to InfluxDB:`, data);
-      
+
+      if (offline.length) {
+        console.warn(`[${new Date().toISOString()}] Sensor channels offline (${offline.join(', ')}). diag: ${data.diag || 'n/a'}`);
+      } else {
+        console.log(`[${new Date().toISOString()}] Sensor data written to InfluxDB:`, data);
+      }
+
       // Feed to intelligent climate controller
       climate.processSensors(data);
     } 

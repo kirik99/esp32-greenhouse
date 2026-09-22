@@ -313,7 +313,24 @@ void mqtt_publish_sensors() {
   doc["substrate_temp"] = current_substrate_temp;
   doc["co2_ppm"] = current_co2_ppm;
 
-  char buffer[512];
+  // Per-channel validity. Values are still sent as the -999 sentinel for backward
+  // compatibility, but the dashboard can now tell "sensor offline" from a real
+  // reading and show why.
+  doc["air_temp_ok"] = sensor_bme_ok && (current_air_temp != -999.0);
+  doc["humidity_ok"] = sensor_bme_ok && (current_humidity != -999.0);
+  doc["pressure_ok"] = sensor_bme_ok && (current_pressure != -999.0);
+  doc["substrate_temp_ok"] = (current_substrate_temp != -999.0);
+  doc["co2_ok"] = (current_co2_ppm != -999);
+
+  doc["bme_status"] = sensor_bme_status;
+  doc["ds_status"] = sensor_ds_status;
+  doc["co2_status"] = sensor_co2_status;
+  doc["i2c_devices"] = i2c_devices;
+  doc["i2c_sda"] = i2c_sda_active;
+  doc["i2c_scl"] = i2c_scl_active;
+  doc["diag"] = sensor_diag;
+
+  char buffer[1024];
   size_t len = serializeJson(doc, buffer);
   int msg_id = esp_mqtt_client_publish(mqtt_client, "growbox/sensors", buffer, len, 0, 0);
   if (msg_id < 0) {

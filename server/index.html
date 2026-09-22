@@ -259,6 +259,9 @@
           </div>
         </div>
       </div>
+
+      <!-- Sensor diagnostics: explains a '--' instead of silently hiding the reason -->
+      <div id="sensorDiag" class="hidden mt-3 text-[11px] font-mono text-amber-200/90 bg-amber-500/[0.06] border border-amber-500/20 rounded-lg px-3 py-2 leading-relaxed"></div>
     </section>
 
     <!-- Main Workspace Split: Relays + Camera -->
@@ -390,17 +393,106 @@
     // Dynamic MQTT Connection (No credentials hardcoded in HTML!)
     let client = null;
 
+    // --- Telemetry helpers -------------------------------------------------
+    // Any of these may be absent, null or the -999 "no data" sentinel depending
+    // on firmware version. Never let one bad field break the whole panel.
+    function isNum(v) {
+      return typeof v === 'number' && isFinite(v) && v !== -999;
+    }
+
+    function fmtVal(v, digits) {
+      return isNum(v) ? v.toFixed(digits) : '--';
+    }
+
+    function isOk(flag, value) {
+      return (flag === undefined || flag === null) ? isNum(value) : !!flag;
+    }
+
+    // Diagnostics are rendered as HTML, so escape everything that came over MQTT.
+    function esc(v) {
+      return String(v).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    // Human explanation for the status codes published by the firmware.
+    function sensorHint(status) {
+      switch (status) {
+        case 'STALE_NO_NEW_DATA':
+          return ' — значения не обновляются: чип не выполняет новых измерений (поддельный/дефектный модуль либо не проходят записи по I²C)';
+        case 'STUCK_5000_PREHEAT_OR_FAULT':
+          return ' — сенсор отвечает, но отдаёт служебное значение: проверьте питание VIN = 5 В и дайте прогреться ~3 минуты';
+        case 'MEASURE_TRIGGER_FAILED':
+          return ' — не удалось запустить измерение, проверьте контакт STEMMA QT';
+        case 'READ_ERROR':
+          return ' — сбои чтения по I²C, проверьте кабель и подтяжки';
+        case 'WRONG_CHIP_ID':
+          return ' — модуль отвечает, но это не BME280 (обычно клон BMP280 без влажности)';
+        case 'NO_PULSE':
+          return ' — нет импульса присутствия, проверьте подтяжку 4.7 кОм и питание';
+        case 'no_reply':
+          return ' — сенсор молчит: питание 5 В, TX→GPIO8, RX→GPIO18, общий GND';
+        case 'bad_checksum':
+          return ' — кадр побит (помехи/плохой контакт на UART)';
+        default:
+          return '';
+      }
+    }
+
+    function renderSensorDiag(d) {
+      const box = document.getElementById('sensorDiag');
+      if (!box) return;
+
+      const problems = [];
+      const warnings = [];
+
+      if (!isOk(d.air_temp_ok, d.air_temp) || !isOk(d.humidity_ok, d.humidity) || !isOk(d.pressure_ok, d.pressure)) {
+        problems.push('BME280 (воздух/влажность/давление): ' + esc(d.bme_status || 'нет данных') +
+          sensorHint(d.bme_status) +
+          ' • шина I²C: ' + esc(d.i2c_devices || '?') +
+          (d.i2c_sda !== undefined ? ' (SDA=' + esc(d.i2c_sda) + ', SCL=' + esc(d.i2c_scl) + ')' : ''));
+      } else if (d.bme_status && d.bme_status !== 'OK') {
+        warnings.push('BME280: ' + esc(d.bme_status) + sensorHint(d.bme_status));
+      }
+
+      if (!isOk(d.substrate_temp_ok, d.substrate_temp)) {
+        problems.push('DS18B20 (субстрат): ' + esc(d.ds_status || 'нет данных') + sensorHint(d.ds_status));
+      }
+
+      if (!isOk(d.co2_ok, d.co2_ppm)) {
+        problems.push('MH-Z19B (CO₂): ' + esc(d.co2_status || 'нет данных') + sensorHint(d.co2_status) +
+          ' — проверьте VIN = 5 В, TX сенсора → GPIO8, RX сенсора → GPIO18');
+      } else if (d.co2_status && d.co2_status !== 'OK') {
+        warnings.push('MH-Z19B (CO₂): ' + esc(d.co2_status) + sensorHint(d.co2_status));
+      }
+
+      if (!problems.length && !warnings.length) {
+        box.classList.add('hidden');
+        box.innerHTML = '';
+        return;
+      }
+
+      box.classList.remove('hidden');
+      box.innerHTML = '<span class="uppercase tracking-wider text-amber-300/80">' +
+          (problems.length ? 'Нет данных с датчиков' : 'Предупреждения по датчикам') + '</span><br>' +
+        problems.map(p => '• ' + p).join('<br>') +
+        (problems.length && warnings.length ? '<br>' : '') +
+        warnings.map(w => '• ' + w).join('<br>') +
+        (d.diag ? '<br><span class="text-zinc-400">diag: ' + esc(d.diag) + '</span>' : '');
+    }
+
     function handleMqttMessage(topic, message) {
       try {
         const text = message.toString();
 
         if (topic === 'growbox/sensors') {
           const d = JSON.parse(text);
-          document.getElementById('valAirTemp').innerText = d.air_temp !== -999 ? d.air_temp.toFixed(1) : '--';
-          document.getElementById('valHum').innerText     = d.humidity !== -999 ? d.humidity.toFixed(1) : '--';
-          document.getElementById('valCo2').innerText     = d.co2_ppm !== -999 ? d.co2_ppm : '--';
-          document.getElementById('valPres').innerText    = d.pressure !== -999 ? d.pressure.toFixed(1) : '--';
-          document.getElementById('valSubTemp').innerText = d.substrate_temp !== -999 ? d.substrate_temp.toFixed(1) : '--';
+          document.getElementById('valAirTemp').innerText = fmtVal(d.air_temp, 1);
+          document.getElementById('valHum').innerText     = fmtVal(d.humidity, 1);
+          document.getElementById('valCo2').innerText     = isNum(d.co2_ppm) ? String(Math.round(d.co2_ppm)) : '--';
+          document.getElementById('valPres').innerText    = fmtVal(d.pressure, 1);
+          document.getElementById('valSubTemp').innerText = fmtVal(d.substrate_temp, 1);
+          renderSensorDiag(d);
           document.getElementById('metricsLastUpdate').innerText = 'Обновлено: ' + new Date().toLocaleTimeString();
         }
         else if (topic === 'growbox/status') {

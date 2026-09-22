@@ -7,9 +7,10 @@ interface Props {
   unit: string;
   icon: LucideIcon;
   colorClass: string;
+  offline?: boolean;
 }
 
-export const SensorCard: React.FC<Props> = ({ title, value, unit, icon: Icon, colorClass }) => {
+export const SensorCard: React.FC<Props> = ({ title, value, unit, icon: Icon, colorClass, offline }) => {
   return (
     <div className="bg-gray-800 rounded-xl p-4 flex flex-col justify-between shadow-lg border border-gray-700">
       <div className="flex justify-between items-center mb-2">
@@ -21,6 +22,11 @@ export const SensorCard: React.FC<Props> = ({ title, value, unit, icon: Icon, co
           <>
             <span className="text-2xl font-bold text-gray-100">{value.toFixed(1)}</span>
             <span className="text-gray-400 text-sm">{unit}</span>
+          </>
+        ) : offline ? (
+          <>
+            <span className="text-2xl font-bold text-gray-500">--</span>
+            <span className="text-gray-500 text-sm">нет данных</span>
           </>
         ) : (
           <div className="h-8 w-16 bg-gray-700 animate-pulse rounded-md" />

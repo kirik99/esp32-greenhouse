@@ -45,6 +45,7 @@ function App() {
               <SensorCard 
                 title="Температура" 
                 value={sensors?.temp} 
+                offline={!!sensors && !sensors.online?.temp}
                 unit="°C" 
                 icon={Thermometer} 
                 colorClass="text-orange-400" 
@@ -52,6 +53,7 @@ function App() {
               <SensorCard 
                 title="Влажность" 
                 value={sensors?.hum} 
+                offline={!!sensors && !sensors.online?.hum}
                 unit="%" 
                 icon={Droplets} 
                 colorClass="text-blue-400" 
@@ -59,6 +61,7 @@ function App() {
               <SensorCard 
                 title="CO2" 
                 value={sensors?.co2} 
+                offline={!!sensors && !sensors.online?.co2}
                 unit="ppm" 
                 icon={Wind} 
                 colorClass="text-emerald-400" 
@@ -66,6 +69,7 @@ function App() {
               <SensorCard 
                 title="Давление" 
                 value={sensors?.pressure} 
+                offline={!!sensors && !sensors.online?.pressure}
                 unit="hPa" 
                 icon={Gauge} 
                 colorClass="text-purple-400" 
@@ -73,11 +77,18 @@ function App() {
               <SensorCard 
                 title="Темп. субстрата" 
                 value={sensors?.soil_temp} 
+                offline={!!sensors && !sensors.online?.soil_temp}
                 unit="°C" 
                 icon={ThermometerSun} 
                 colorClass="text-amber-500" 
               />
             </div>
+
+            {sensors?.diag && (
+              <p className="text-[11px] font-mono text-amber-300/80 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2">
+                diag: {sensors.diag}
+              </p>
+            )}
 
             <div className="pt-4">
               <RelayPanel relays={relays} setRelay={setRelay} />
