@@ -148,31 +148,53 @@
       <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 border border-rose-500/20 text-rose-300">ESP32 FAILSAFE</span>
     </div>
 
-    <!-- Oyster Mushroom Cultivation Profile Bar (70L Container) -->
-    <div class="panel p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div class="space-y-1">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-xs font-semibold tracking-wider text-zinc-200 uppercase">Профиль микроклимата: Вешенка (P. ostreatus)</span>
-          <span id="activeStagePill" class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 font-semibold">ИНКУБАЦИЯ</span>
-          <span id="climateSubstateBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-300">Норма</span>
+    <!-- Universal Mushroom Profile & Cycle Bar -->
+    <div class="panel p-4 flex flex-col gap-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="space-y-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-semibold tracking-wider text-zinc-300 uppercase">Профиль:</span>
+            <!-- Species Selector Dropdown -->
+            <select id="profileSelect" onchange="onProfileSelectChange(this.value)" class="bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1 text-xs font-semibold text-white focus:outline-none focus:border-emerald-500 cursor-pointer">
+              <option value="pleurotus_ostreatus">Вешенка обыкновенная (Pleurotus ostreatus)</option>
+              <option value="pleurotus_eryngii">Королевская вешенка (Pleurotus eryngii)</option>
+              <option value="hericium_erinaceus">Ежовик гребенчатый (Hericium erinaceus)</option>
+              <option value="lentinula_edodes">Шиитаке (Lentinula edodes)</option>
+              <option value="agaricus_bisporus">Шампиньон (Agaricus bisporus)</option>
+            </select>
+            <span id="activeStagePill" class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 font-semibold">КОЛОНИЗАЦИЯ</span>
+            <span id="climateSubstateBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-300">Норма</span>
+          </div>
+          <p class="text-[11px] text-zinc-400 font-mono" id="stageTips">
+            Субстрат: 23–25°C • Влажность: 75–85% • CO₂ до 2500 ppm • Свет: ВЫКЛ • FAE: 45с / 3ч
+          </p>
         </div>
-        <p class="text-[11px] text-zinc-400 font-mono" id="stageTips">
-          Субстрат: 23–24.5°C • Влажность: 74–82% • CO₂ до 15000 ppm • Свет: ВЫКЛ (Темнота) • FAE: 45с / 3ч
-        </p>
+
+        <!-- Action Quick-buttons: Harvest, AI Export, Settings -->
+        <div class="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          <button onclick="openHarvestModal()" class="px-2.5 py-1.5 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border border-emerald-500/30 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer">
+            <span>🍄</span> Записать урожай
+          </button>
+          <button onclick="exportDataset()" title="Скачать AI-датасет в JSON" class="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-white/10 text-xs font-medium flex items-center gap-1.5 transition cursor-pointer">
+            <span>📊</span> AI Датасет
+          </button>
+          <button onclick="openSettingsModal()" title="Настройки интервалов записи" class="px-2 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-white/10 text-xs transition cursor-pointer">
+            ⚙️
+          </button>
+        </div>
       </div>
-      <div class="flex flex-wrap items-center gap-1.5 p-1 rounded-lg bg-zinc-900 border border-white/[0.06] text-xs font-medium self-start md:self-auto">
-        <button id="btnStageIncubation" onclick="selectStage('incubation')" class="px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer">
-          Инкубация
-        </button>
-        <button id="btnStagePinning" onclick="selectStage('pinning')" class="px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer">
-          Инициация
-        </button>
-        <button id="btnStageFruiting" onclick="selectStage('fruiting')" class="px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer">
-          Плодоношение
-        </button>
-        <button id="btnStageManual" onclick="selectStage('manual')" class="px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer">
-          Ручной
-        </button>
+
+      <!-- Dynamic Stage Buttons Container -->
+      <div class="flex items-center justify-between pt-2 border-t border-white/[0.06] flex-wrap gap-2">
+        <div class="flex items-center gap-1.5 text-xs text-zinc-400 font-mono">
+          <span class="text-[11px] text-zinc-500 uppercase">Стадии:</span>
+          <div id="stageButtonsContainer" class="flex flex-wrap items-center gap-1.5 p-1 rounded-lg bg-zinc-900 border border-white/[0.06] text-xs font-medium">
+            <!-- Dynamically populated from active profile stages -->
+          </div>
+        </div>
+        <div id="harvestSummaryBadge" class="text-[11px] font-mono text-zinc-400">
+          Собрано: <span id="totalHarvestGrams" class="text-emerald-400 font-semibold">0</span> г
+        </div>
       </div>
     </div>
 
@@ -729,85 +751,250 @@
     }
 
 
-    // 4 Cultivation Profiles (Pleurotus ostreatus)
-    const PROFILES = {
-      incubation: {
-        title: 'ИНКУБАЦИЯ',
-        tips: 'Субстрат: 23–24.5°C • Влажность: 74–82% • CO₂ до 15000 ppm • Свет: ВЫКЛ (Темнота) • FAE: 45с / 3ч'
-      },
-      pinning: {
-        title: 'ИНИЦИАЦИЯ (ХОЛОДОВОЙ ШОК)',
-        tips: 'Воздух: 14–16.5°C • Влажность: 92–96% • CO₂ < 950 ppm • Свет: 10ч (09:00-19:00) • FAE: активный 20 мин'
-      },
-      fruiting: {
-        title: 'ПЛОДОНОШЕНИЕ',
-        tips: 'Воздух: 16.5–19.5°C • Влажность: 85–90% • CO₂ < 1000 ppm • Свет: 12ч (08:00-20:00) • FAE: базовый 20 мин'
-      },
-      manual: {
-        title: 'РУЧНОЙ РЕЖИМ',
-        tips: 'Автоматика приостановлена. Управление реле вручную кнопками (аппаратные отсечки активны).'
-      }
-    };
+    // Universal Mushroom Profile & Cycle State
+    let loadedProfiles = [];
+    let currentProfile = null;
+    let currentStageId = null;
+    let currentCycleId = null;
 
-    function selectStage(stage) {
+    function loadAllProfiles() {
+      const headers = sessionToken ? { 'Authorization': 'Bearer ' + sessionToken } : {};
+      fetch(apiBase + '/api/profiles', { headers })
+        .then(r => r.json())
+        .then(profiles => {
+          if (Array.isArray(profiles) && profiles.length > 0) {
+            loadedProfiles = profiles;
+            const select = document.getElementById('profileSelect');
+            if (select) {
+              select.innerHTML = '';
+              profiles.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.innerText = p.name + ' (' + p.species + ')';
+                select.appendChild(opt);
+              });
+              if (!currentProfile) {
+                currentProfile = profiles[0];
+                select.value = currentProfile.id;
+                renderStageButtons(currentProfile);
+              }
+            }
+          }
+        })
+        .catch(err => console.warn('Failed to load profiles:', err));
+
+      // Also check active cycles
+      fetch(apiBase + '/api/cycles?status=active', { headers })
+        .then(r => r.json())
+        .then(cycles => {
+          if (Array.isArray(cycles) && cycles.length > 0) {
+            const active = cycles[0];
+            currentCycleId = active.id;
+            currentStageId = active.current_stage_id;
+            if (active.profile_id) {
+              const matched = loadedProfiles.find(p => p.id === active.profile_id);
+              if (matched) {
+                currentProfile = matched;
+                document.getElementById('profileSelect').value = matched.id;
+                renderStageButtons(matched, currentStageId);
+              }
+            }
+            if (Array.isArray(active.harvests)) {
+              updateHarvestBadge(active.harvests);
+            }
+          }
+        })
+        .catch(e => console.warn('Failed to load active cycles:', e));
+    }
+
+    function onProfileSelectChange(profileId) {
+      const p = loadedProfiles.find(x => x.id === profileId);
+      if (!p) return;
+      currentProfile = p;
+      renderStageButtons(p);
+
+      // Start new cycle or update mode if authorized
       requireAuth(() => {
-        applyStageUI(stage);
-
-        fetch(apiBase + '/api/climate/mode', {
+        fetch(apiBase + '/api/cycles/start', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + sessionToken
           },
-          body: JSON.stringify({ mode: stage })
+          body: JSON.stringify({ box_id: 'box_a', profile_id: profileId })
         })
         .then(r => r.json())
-        .then(data => {
-          if (data && data.state) {
-            updateClimateUI(data.state);
+        .then(cycle => {
+          if (cycle && cycle.id) {
+            currentCycleId = cycle.id;
+            currentStageId = cycle.current_stage_id;
+            renderStageButtons(currentProfile, currentStageId);
           }
         })
-        .catch(err => {
-          console.warn('Mode change REST error:', err);
-        });
+        .catch(e => console.warn('Start cycle error:', e));
       });
     }
 
-    function applyStageUI(stage) {
-      const p = PROFILES[stage] || PROFILES.fruiting;
-      const pill = document.getElementById('activeStagePill');
-      if (pill) {
-        pill.innerText = p.title;
-        if (stage === 'incubation') {
-          pill.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 font-semibold';
-        } else if (stage === 'pinning') {
-          pill.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-semibold';
-        } else if (stage === 'fruiting') {
-          pill.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-semibold';
-        } else {
-          pill.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-zinc-500/10 border border-zinc-500/20 text-zinc-300 font-semibold';
+    function renderStageButtons(profile, activeStageId = null) {
+      const container = document.getElementById('stageButtonsContainer');
+      if (!container || !profile || !profile.stages) return;
+
+      container.innerHTML = '';
+      const stages = [...profile.stages].sort((a, b) => (a.order || 0) - (b.order || 0));
+      const activeStage = stages.find(s => s.id === activeStageId) || stages[0];
+      currentStageId = activeStage ? activeStage.id : null;
+
+      // Update tips and pill
+      if (activeStage) {
+        const pill = document.getElementById('activeStagePill');
+        if (pill) pill.innerText = activeStage.name.toUpperCase();
+        const tips = document.getElementById('stageTips');
+        if (tips) {
+          const tTarget = activeStage.temp ? activeStage.temp.target : '--';
+          const hTarget = activeStage.humidity ? activeStage.humidity.target : '--';
+          const co2Max = activeStage.co2 ? activeStage.co2.max : '--';
+          tips.innerText = `Цель: T ${tTarget}°C • Влажность ${hTarget}% • CO₂ макс ${co2Max} ppm • Длительность ~${activeStage.duration_days || 7} дн.`;
         }
       }
-      const tips = document.getElementById('stageTips');
-      if (tips) tips.innerText = p.tips;
 
-      ['incubation', 'pinning', 'fruiting', 'manual'].forEach(st => {
-        const btn = document.getElementById('btnStage' + st.charAt(0).toUpperCase() + st.slice(1));
-        if (btn) {
-          if (st === stage) {
-            btn.className = 'px-2.5 py-1 rounded-md bg-zinc-800 text-white border border-white/10 font-semibold transition cursor-pointer shadow-sm';
-          } else {
-            btn.className = 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer';
-          }
-        }
+      stages.forEach(stage => {
+        const btn = document.createElement('button');
+        const isActive = (stage.id === currentStageId);
+        btn.className = isActive
+          ? 'px-2.5 py-1 rounded-md bg-emerald-600 text-white border border-emerald-400 font-semibold transition cursor-pointer shadow-sm'
+          : 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition cursor-pointer';
+        btn.innerText = stage.name;
+        btn.onclick = () => selectProfileStage(stage.id);
+        container.appendChild(btn);
       });
+    }
+
+    function selectProfileStage(stageId) {
+      requireAuth(() => {
+        if (!currentCycleId) {
+          // Fallback to legacy climate mode call
+          fetch(apiBase + '/api/climate/mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+            body: JSON.stringify({ mode: stageId })
+          }).catch(console.warn);
+        } else {
+          fetch(apiBase + '/api/cycles/' + currentCycleId + '/stage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+            body: JSON.stringify({ stage_id: stageId })
+          })
+          .then(r => r.json())
+          .then(cycle => {
+            if (cycle && cycle.current_stage_id) {
+              currentStageId = cycle.current_stage_id;
+              renderStageButtons(currentProfile, currentStageId);
+            }
+          })
+          .catch(console.warn);
+        }
+        renderStageButtons(currentProfile, stageId);
+      });
+    }
+
+    function updateHarvestBadge(harvests) {
+      const total = harvests.reduce((acc, h) => acc + (Number(h.weight_grams) || 0), 0);
+      const span = document.getElementById('totalHarvestGrams');
+      if (span) span.innerText = Math.round(total);
+    }
+
+    // --- Harvest Modal Handling ---
+    function openHarvestModal() {
+      requireAuth(() => {
+        document.getElementById('harvestModal').classList.remove('hidden');
+        document.getElementById('harvestWeight').value = '';
+        document.getElementById('harvestNotes').value = '';
+        document.getElementById('harvestWeight').focus();
+      });
+    }
+
+    function closeHarvestModal() {
+      document.getElementById('harvestModal').classList.add('hidden');
+    }
+
+    function submitHarvest() {
+      const weight = parseFloat(document.getElementById('harvestWeight').value);
+      const flush = parseInt(document.getElementById('harvestFlush').value) || 1;
+      const notes = document.getElementById('harvestNotes').value || '';
+
+      if (!weight || weight <= 0) {
+        alert('Пожалуйста, введите корректный вес в граммах');
+        return;
+      }
+
+      const cycleId = currentCycleId || 'default';
+      fetch(apiBase + '/api/cycles/' + cycleId + '/harvest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ flush_number: flush, weight_grams: weight, notes })
+      })
+      .then(r => r.json())
+      .then(res => {
+        closeHarvestModal();
+        alert(`Урожай ${weight} г успешно сохранён!`);
+        loadAllProfiles();
+      })
+      .catch(e => {
+        alert('Ошибка при сохранении урожая: ' + e.message);
+      });
+    }
+
+    // --- AI Dataset Export ---
+    function exportDataset() {
+      requireAuth(() => {
+        const url = apiBase + '/api/export/dataset?token=' + encodeURIComponent(sessionToken);
+        fetch(url, {
+          headers: { 'Authorization': 'Bearer ' + sessionToken }
+        })
+        .then(r => r.blob())
+        .then(blob => {
+          const dlUrl = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = dlUrl;
+          a.download = `growbox_ai_dataset_${new Date().toISOString().slice(0,10)}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        })
+        .catch(err => alert('Ошибка экспорта: ' + err.message));
+      });
+    }
+
+    // --- Settings Modal ---
+    function openSettingsModal() {
+      requireAuth(() => {
+        document.getElementById('settingsModal').classList.remove('hidden');
+      });
+    }
+
+    function closeSettingsModal() {
+      document.getElementById('settingsModal').classList.add('hidden');
+    }
+
+    function saveSettings() {
+      const sensorInt = parseInt(document.getElementById('settingSensorInterval').value) || 30;
+      const cameraInt = parseInt(document.getElementById('settingCameraInterval').value) || 600;
+
+      fetch(apiBase + '/api/settings/intervals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ sensor_interval_s: sensorInt, camera_interval_s: cameraInt })
+      })
+      .then(r => r.json())
+      .then(res => {
+        closeSettingsModal();
+        alert('Интервалы успешно обновлены на ESP32!');
+      })
+      .catch(e => alert('Ошибка: ' + e.message));
     }
 
     function updateClimateUI(state) {
       if (!state) return;
-      if (state.mode) {
-        applyStageUI(state.mode);
-      }
       const badge = document.getElementById('climateSubstateBadge');
       if (badge && state.substate) {
         badge.innerText = state.substate;
@@ -820,7 +1007,6 @@
         } else {
           badge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-300';
         }
-      }
     }
 
     function toggleRelay(id) {
@@ -985,8 +1171,10 @@
 
     // Startup session check & periodic refresh
     checkInitialSession();
+    loadAllProfiles();
     setInterval(loadLatestImage, 60000);
     setInterval(fetchInitialClimate, 30000);
+    setInterval(loadAllProfiles, 60000);
   </script>
 
   <!-- PIN Authorization Modal -->
@@ -1024,6 +1212,87 @@
         </button>
       </div>
       <p class="text-[10px] text-zinc-500 text-center font-mono">Доступ открывается на 15 минут</p>
+    </div>
+  </div>
+
+  <!-- Harvest Recording Modal -->
+  <div id="harvestModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="panel p-6 max-w-sm w-full space-y-4 border-white/20 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-xl">🍄</span>
+          <h3 class="text-sm font-semibold text-white">Записать сбор урожая</h3>
+        </div>
+        <button onclick="closeHarvestModal()" class="text-zinc-500 hover:text-white p-1">✕</button>
+      </div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs text-zinc-400 mb-1">Номер волны (Flush):</label>
+          <select id="harvestFlush" class="w-full py-2 px-3 rounded-lg bg-zinc-900 border border-white/10 text-white text-xs font-mono">
+            <option value="1">Волна 1 (Первая)</option>
+            <option value="2">Волна 2</option>
+            <option value="3">Волна 3</option>
+            <option value="4">Волна 4+</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-zinc-400 mb-1">Вес срезанных грибов (в граммах):</label>
+          <input type="number" id="harvestWeight" placeholder="Например: 450" step="0.1"
+            class="w-full py-2 px-3 rounded-lg bg-zinc-900 border border-white/10 text-white font-mono text-sm focus:outline-none focus:border-emerald-500">
+        </div>
+        <div>
+          <label class="block text-xs text-zinc-400 mb-1">Заметки / Качество:</label>
+          <input type="text" id="harvestNotes" placeholder="Плотные шляпки, чистый срез..."
+            class="w-full py-2 px-3 rounded-lg bg-zinc-900 border border-white/10 text-white text-xs focus:outline-none focus:border-emerald-500">
+        </div>
+      </div>
+
+      <div class="flex gap-2 pt-2">
+        <button onclick="closeHarvestModal()" class="flex-1 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-xs">
+          Отмена
+        </button>
+        <button onclick="submitHarvest()" class="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">
+          Сохранить урожай
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timing Intervals Modal -->
+  <div id="settingsModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="panel p-6 max-w-sm w-full space-y-4 border-white/20 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-xl">⚙️</span>
+          <h3 class="text-sm font-semibold text-white">Интервалы записи и камеры</h3>
+        </div>
+        <button onclick="closeSettingsModal()" class="text-zinc-500 hover:text-white p-1">✕</button>
+      </div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs text-zinc-400 mb-1">Опрос датчиков (сек):</label>
+          <input type="number" id="settingSensorInterval" value="30" min="5" max="3600"
+            class="w-full py-2 px-3 rounded-lg bg-zinc-900 border border-white/10 text-white font-mono text-sm">
+          <p class="text-[10px] text-zinc-500 mt-0.5">По умолчанию: 30 секунд</p>
+        </div>
+        <div>
+          <label class="block text-xs text-zinc-400 mb-1">Снимок камеры (сек):</label>
+          <input type="number" id="settingCameraInterval" value="600" min="30" max="86400"
+            class="w-full py-2 px-3 rounded-lg bg-zinc-900 border border-white/10 text-white font-mono text-sm">
+          <p class="text-[10px] text-zinc-500 mt-0.5">600 сек = каждые 10 минут</p>
+        </div>
+      </div>
+
+      <div class="flex gap-2 pt-2">
+        <button onclick="closeSettingsModal()" class="flex-1 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-xs">
+          Отмена
+        </button>
+        <button onclick="saveSettings()" class="flex-1 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">
+          Применить на ESP32
+        </button>
+      </div>
     </div>
   </div>
 </body>
