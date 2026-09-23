@@ -18,8 +18,9 @@ services:
         mosquitto_passwd -c -b /mosquitto/data/passwords.txt "$$MQTT_ESP32_USER" "$$MQTT_ESP32_PASSWORD";
         mosquitto_passwd -b /mosquitto/data/passwords.txt "$$MQTT_BRIDGE_USER" "$$MQTT_BRIDGE_PASSWORD";
         mosquitto_passwd -b /mosquitto/data/passwords.txt "$$MQTT_WEB_USER" "$$MQTT_WEB_PASSWORD";
-        chown root:mosquitto /mosquitto/data/passwords.txt;
-        chmod 0640 /mosquitto/data/passwords.txt;
+        chown -R mosquitto:mosquitto /mosquitto/data;
+        chmod 0700 /mosquitto/data;
+        chmod 0600 /mosquitto/data/passwords.txt;
         exec /docker-entrypoint.sh /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
       '
     volumes:

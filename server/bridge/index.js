@@ -46,6 +46,18 @@ mqttClient.on('connect', () => {
   mqttClient.subscribe('growbox/image/raw');
 });
 
+mqttClient.on('reconnect', () => {
+  console.log(`[${new Date().toISOString()}] Reconnecting to MQTT broker...`);
+});
+
+mqttClient.on('error', (err) => {
+  console.error(`[${new Date().toISOString()}] [MQTT ERR]`, err.message || err);
+});
+
+mqttClient.on('close', () => {
+  // MQTT connection closed, will automatically reconnect
+});
+
 function yuy2ToRgba(yuy2Buffer, width, height) {
   const rgba = Buffer.alloc(width * height * 4);
   for (let i = 0, j = 0; i < yuy2Buffer.length; i += 4, j += 8) {
