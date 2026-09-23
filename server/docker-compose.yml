@@ -58,7 +58,7 @@ services:
       - MQTT_PASSWORD=${MQTT_BRIDGE_PASSWORD:-growbox_bridge_secret}
       - MQTT_WEB_USER=${MQTT_WEB_USER:-growbox_web}
       - MQTT_WEB_PASSWORD=${MQTT_WEB_PASSWORD:-growbox_web_secret}
-      - PUBLIC_TELEMETRY=${PUBLIC_TELEMETRY:-true}
+      - PUBLIC_TELEMETRY=true
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-growbox-super-secret-token}
       - INFLUXDB_ORG=${INFLUXDB_ORG:-growbox}
