@@ -581,15 +581,43 @@
         try { client.end(true); } catch(e) {}
         client = null;
       }
-      if (!mqttCreds || !mqttCreds.username) return;
+      if (!mqttCreds || !mqttCreds.username) {
+        console.warn('initMqtt called without credentials');
+        return;
+      }
 
-      client = mqtt.connect(wsUrl, {
-        username: mqttCreds.username,
-        password: mqttCreds.password,
-        clientId: 'growbox_web_' + Math.random().toString(16).slice(2, 8)
-      });
+      console.log('initMqtt connecting to:', wsUrl, 'user:', mqttCreds.username);
+      const mqttLib = (typeof mqtt !== 'undefined' && typeof mqtt.connect === 'function') 
+        ? mqtt 
+        : (typeof window !== 'undefined' && window.mqtt && typeof window.mqtt.connect === 'function') 
+          ? window.mqtt 
+          : (typeof window !== 'undefined' && window.mqtt && window.mqtt.default && typeof window.mqtt.default.connect === 'function')
+            ? window.mqtt.default
+            : null;
+
+      if (!mqttLib) {
+        console.error('MQTT.js library not loaded yet or unavailable');
+        const text = document.getElementById('statusText');
+        if (text) text.innerText = 'LIB_ERR';
+        return;
+      }
+
+      try {
+        client = mqttLib.connect(wsUrl, {
+          username: mqttCreds.username,
+          password: mqttCreds.password,
+          clientId: 'growbox_web_' + Math.random().toString(16).slice(2, 8),
+          reconnectPeriod: 3000
+        });
+      } catch (err) {
+        console.error('Failed to call mqtt.connect:', err);
+        const text = document.getElementById('statusText');
+        if (text) text.innerText = 'INIT_ERR';
+        return;
+      }
 
       client.on('connect', () => {
+        console.log('MQTT WebSocket connected successfully!');
         const dot = document.getElementById('statusDot');
         if (dot) dot.className = 'w-2 h-2 rounded-full bg-emerald-400 glow-dot';
         const text = document.getElementById('statusText');
