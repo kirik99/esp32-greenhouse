@@ -164,7 +164,7 @@ static BmeInitResult bme_init_on_bus(int sda, int scl) {
 // ---------------------------------------------------------------------------
 
 int autodetect_ds18b20() {
-  const int candidate_pins[] = {PIN_DS18B20, 5, 13, 6, 7};
+  const int candidate_pins[] = {PIN_DS18B20, 4, 12, 5, 13, 1, 6, 7};
   for (int p : candidate_pins) {
     // Never poke the pins that are currently driving the I2C bus.
     if (p == i2c_sda_active || p == i2c_scl_active) continue;
@@ -421,6 +421,30 @@ void read_sensors() {
   if (ow_presence == 1) {
     ds18b20.requestTemperatures();
     float t = ds18b20.getTempCByIndex(0);
+
+    if (t <= -100.0 || t >= 125.0) {
+      // Re-index devices in case DallasTemperature missed initial enumeration
+      ds18b20.begin();
+      ds18b20.requestTemperatures();
+      t = ds18b20.getTempCByIndex(0);
+    }
+
+    if (t <= -100.0 || t >= 125.0) {
+      // Direct 1-Wire scratchpad read fallback
+      oneWire.reset();
+      oneWire.skip();
+      oneWire.write(0xBE);
+      uint8_t sp[9];
+      for (int i = 0; i < 9; i++) sp[i] = oneWire.read();
+      if (OneWire::crc8(sp, 8) == sp[8]) {
+        int16_t raw = (sp[1] << 8) | sp[0];
+        float direct_t = (float)raw / 16.0f;
+        if (direct_t > -55.0f && direct_t < 125.0f) {
+          t = direct_t;
+        }
+      }
+    }
+
     if (t > -100.0 && t < 125.0) {
       current_substrate_temp = t;
       sensor_ds_ok = true;
@@ -430,7 +454,7 @@ void read_sensors() {
       current_substrate_temp = -999.0;
       sensor_ds_ok = false;
       sensor_ds_status = "BAD_VALUE";
-      diag += "DS:ErrVal(" + String(t, 1) + "); ";
+      diag += "DS:ErrVal(pin" + String(current_ds_pin) + "=" + String(t, 1) + "); ";
     }
   } else {
     current_substrate_temp = -999.0;

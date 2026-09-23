@@ -116,7 +116,7 @@
       <!-- Authorization Lock Badge -->
       <button id="authBadge" onclick="handleAuthClick()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] hover:border-white/20 text-xs transition cursor-pointer">
         <span id="authIcon">🔒</span>
-        <span id="authText" class="font-medium text-zinc-400 font-mono text-[11px]">LOCKED</span>
+        <span id="authText" class="font-medium text-zinc-400 font-mono text-[11px]">PIN-ЗАЩИТА</span>
       </button>
 
       <div id="statusBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] text-xs">
@@ -385,11 +385,11 @@
     ];
 
     let relayStates = [false, false, false, false, false, false];
-    const host = window.location.hostname || '192.168.139.36';
-    const isStandardPort = !window.location.port || window.location.port === '80' || window.location.port === '443';
-    const apiBase = isStandardPort ? '' : ('http://' + host + ':3001');
+    const isFile = window.location.protocol === 'file:';
+    const host = window.location.hostname || 'localhost';
+    const apiBase = isFile ? ('http://' + (host === 'localhost' ? 'localhost' : host) + ':3001') : '';
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = isStandardPort ? (wsProto + '//' + host + '/mqtt') : ('ws://' + host + ':9001');
+    const wsUrl = isFile ? ('ws://' + host + ':9001') : (wsProto + '//' + (window.location.host || host) + '/mqtt');
 
     // Render Relays with Sleek Toggle UI
     const container = document.getElementById('relaysContainer');
@@ -613,6 +613,20 @@
         }
       });
 
+      client.on('reconnect', () => {
+        const dot = document.getElementById('statusDot');
+        if (dot) dot.className = 'w-2 h-2 rounded-full bg-amber-400';
+        const text = document.getElementById('statusText');
+        if (text) {
+          text.innerText = 'RECONNECTING';
+          text.className = 'font-medium text-amber-400 font-mono text-[11px]';
+        }
+      });
+
+      client.on('error', (err) => {
+        console.warn('MQTT client error:', err);
+      });
+
       client.on('message', handleMqttMessage);
     }
 
@@ -635,6 +649,7 @@
     let unlockExpiresAt = 0;
     let pendingAction = null;
     let sessionToken = null;
+    let publicTelemetryActive = false;
 
     function checkLockStatus() {
       const authIcon = document.getElementById('authIcon');
@@ -646,7 +661,7 @@
         const mins = Math.floor(remainingSec / 60);
         const secs = remainingSec % 60;
         authIcon.innerText = '🔓';
-        authText.innerText = 'UNLOCKED (' + mins + ':' + (secs < 10 ? '0' : '') + secs + ')';
+        authText.innerText = 'УПРАВЛЕНИЕ (' + mins + ':' + (secs < 10 ? '0' : '') + secs + ')';
         authText.className = 'font-medium text-emerald-400 font-mono text-[11px]';
         authBadge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-950/40 border border-emerald-500/30 text-xs transition cursor-pointer';
       } else {
@@ -655,11 +670,11 @@
           isUnlocked = false;
           sessionToken = null;
           sessionStorage.removeItem('growbox_session_token');
-          disconnectMqtt();
+          if (!publicTelemetryActive) disconnectMqtt();
         }
         isUnlocked = false;
         authIcon.innerText = '🔒';
-        authText.innerText = 'LOCKED';
+        authText.innerText = 'PIN-ЗАЩИТА';
         authText.className = 'font-medium text-zinc-400 font-mono text-[11px]';
         authBadge.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] hover:border-white/20 text-xs transition cursor-pointer';
       }
@@ -672,7 +687,7 @@
         unlockExpiresAt = 0;
         sessionToken = null;
         sessionStorage.removeItem('growbox_session_token');
-        disconnectMqtt();
+        if (!publicTelemetryActive) disconnectMqtt();
         checkLockStatus();
       } else {
         openPinModal();
@@ -1145,11 +1160,14 @@
             isUnlocked = true;
             sessionToken = savedToken;
             unlockExpiresAt = Date.now() + 15 * 60 * 1000;
+            if (data.public_telemetry) publicTelemetryActive = true;
             checkLockStatus();
             if (data.mqtt) initMqtt(data.mqtt);
             loadLatestImage();
             fetchInitialClimate();
           } else if (data && data.public_telemetry) {
+            publicTelemetryActive = true;
+            checkLockStatus();
             if (data.mqtt) initMqtt(data.mqtt);
             loadLatestImage();
             fetchInitialClimate();

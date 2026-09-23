@@ -93,5 +93,13 @@ void loop() {
     last_safety_time = now;
   }
 
+  if (Serial.available()) {
+    char ch = Serial.read();
+    if (ch == 'c' || ch == 'C') {
+      Serial.println("\n[USER CMD] Triggering CO2 Zero Calibration (400 ppm)...");
+      calibrate_co2_zero();
+    }
+  }
+
   process_camera();
 }

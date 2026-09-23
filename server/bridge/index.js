@@ -17,7 +17,7 @@ const MQTT_USER = process.env.MQTT_USER || 'growbox_bridge';
 const MQTT_PASSWORD = process.env.MQTT_PASSWORD || 'growbox_bridge_secret';
 const MQTT_WEB_USER = process.env.MQTT_WEB_USER || 'growbox_web';
 const MQTT_WEB_PASSWORD = process.env.MQTT_WEB_PASSWORD || 'growbox_web_secret';
-const PUBLIC_TELEMETRY = process.env.PUBLIC_TELEMETRY === 'true';
+const PUBLIC_TELEMETRY = process.env.PUBLIC_TELEMETRY !== 'false';
 const INFLUXDB_URL = process.env.INFLUXDB_URL || 'http://localhost:8086';
 const INFLUXDB_TOKEN = process.env.INFLUXDB_TOKEN || 'growbox-super-secret-token';
 const INFLUXDB_ORG = process.env.INFLUXDB_ORG || 'growbox';

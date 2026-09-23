@@ -70,6 +70,8 @@ function writeRaw(data) {
   fs.renameSync(tmp, STORE_FILE);
 }
 
+const DEFAULT_PROFILES = require('./default_profiles');
+
 // ---------------------------------------------------------------------------
 // Store class
 // ---------------------------------------------------------------------------
@@ -82,6 +84,47 @@ class Store {
     if (!Array.isArray(this._db.grow_cycles))     this._db.grow_cycles = [];
     if (!Array.isArray(this._db.photo_metadata))  this._db.photo_metadata = [];
     if (!this._db.global_safety)                  this._db.global_safety = EMPTY_STORE.global_safety;
+
+    // Seed default profiles if none exist
+    if (this._db.profiles.length === 0) {
+      this._db.profiles = JSON.parse(JSON.stringify(DEFAULT_PROFILES));
+      this._save();
+    }
+
+    // Seed default box if none exist
+    if (this._db.boxes.length === 0) {
+      this._db.boxes.push({
+        id: 'box_a',
+        name: 'Камера 1 (Основная)',
+        device_id: 'growbox_esp32',
+        active_cycle_id: null,
+        status: 'active',
+        created_at: this._now()
+      });
+      this._save();
+    }
+
+    // Seed default active cycle if none exist
+    if (this._db.grow_cycles.length === 0 && this._db.profiles.length > 0) {
+      const defaultProfile = this._db.profiles[0];
+      const initialCycle = {
+        id: uuidv4(),
+        box_id: 'box_a',
+        profile_id: defaultProfile.id,
+        profile_name: defaultProfile.name,
+        profile_snapshot: JSON.parse(JSON.stringify(defaultProfile)),
+        current_stage_id: defaultProfile.stages[0]?.id || 'stage_1',
+        started_at: this._now(),
+        completed_at: null,
+        status: 'active',
+        harvests: [],
+        notes: 'Инициализирован по умолчанию'
+      };
+      this._db.grow_cycles.push(initialCycle);
+      this._db.boxes[0].active_cycle_id = initialCycle.id;
+      this._db.boxes[0].status = 'active';
+      this._save();
+    }
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
