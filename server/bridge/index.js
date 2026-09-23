@@ -159,7 +159,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const ADMIN_PIN = process.env.ADMIN_PIN || '2212';
+const ADMIN_PIN = String(process.env.ADMIN_PIN || '').trim();
 const activeSessions = new Set();
 const loginAttempts = new Map(); // ip -> { count, lockedUntil }
 
@@ -206,8 +206,7 @@ app.post('/api/auth/verify', (req, res) => {
   const { pin } = req.body;
   if (!pin) return res.status(400).json({ success: false, error: 'PIN required' });
   const trimmedPin = String(pin).trim();
-  const isMatch = timingSafeCompare(trimmedPin, ADMIN_PIN) || timingSafeCompare(trimmedPin, '2212');
-  if (isMatch) {
+  if (ADMIN_PIN && timingSafeCompare(trimmedPin, ADMIN_PIN)) {
     loginAttempts.delete(ip);
     const token = Buffer.from(`${Date.now()}_${Math.random()}`).toString('base64');
     activeSessions.add(token);
