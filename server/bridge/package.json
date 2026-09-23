@@ -4,7 +4,8 @@
   "description": "Bridge service for Growbox IoT",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --coverage"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "^1.33.2",
@@ -12,6 +13,10 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jpeg-js": "^0.4.4",
-    "mqtt": "^5.10.1"
+    "mqtt": "^5.10.1",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }

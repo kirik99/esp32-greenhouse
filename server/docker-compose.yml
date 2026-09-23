@@ -64,10 +64,12 @@ services:
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-sensors}
       - BRIDGE_PORT=3001
       - IMAGES_DIR=/app/images
+      - DATA_DIR=/app/data
       - ADMIN_PIN=${ADMIN_PIN:-2212}
       - TZ=${TZ:-Europe/Moscow}
     volumes:
       - ./bridge/images:/app/images
+      - ./bridge/data:/app/data
     depends_on:
       - mosquitto
       - influxdb
