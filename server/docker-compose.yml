@@ -18,8 +18,9 @@ services:
         mosquitto_passwd -c -b /mosquitto/data/passwords.txt "$$MQTT_ESP32_USER" "$$MQTT_ESP32_PASSWORD";
         mosquitto_passwd -b /mosquitto/data/passwords.txt "$$MQTT_BRIDGE_USER" "$$MQTT_BRIDGE_PASSWORD";
         mosquitto_passwd -b /mosquitto/data/passwords.txt "$$MQTT_WEB_USER" "$$MQTT_WEB_PASSWORD";
-        chown root:mosquitto /mosquitto/data/passwords.txt;
-        chmod 0640 /mosquitto/data/passwords.txt;
+        chown -R mosquitto:mosquitto /mosquitto/data;
+        chmod 0700 /mosquitto/data;
+        chmod 0600 /mosquitto/data/passwords.txt;
         exec /docker-entrypoint.sh /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
       '
     volumes:
@@ -57,17 +58,19 @@ services:
       - MQTT_PASSWORD=${MQTT_BRIDGE_PASSWORD:-growbox_bridge_secret}
       - MQTT_WEB_USER=${MQTT_WEB_USER:-growbox_web}
       - MQTT_WEB_PASSWORD=${MQTT_WEB_PASSWORD:-growbox_web_secret}
-      - PUBLIC_TELEMETRY=${PUBLIC_TELEMETRY:-false}
+      - PUBLIC_TELEMETRY=${PUBLIC_TELEMETRY:-true}
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-growbox-super-secret-token}
       - INFLUXDB_ORG=${INFLUXDB_ORG:-growbox}
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-sensors}
       - BRIDGE_PORT=3001
       - IMAGES_DIR=/app/images
+      - DATA_DIR=/app/data
       - ADMIN_PIN=${ADMIN_PIN:-2212}
       - TZ=${TZ:-Europe/Moscow}
     volumes:
       - ./bridge/images:/app/images
+      - ./bridge/data:/app/data
     depends_on:
       - mosquitto
       - influxdb

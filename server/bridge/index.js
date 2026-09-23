@@ -7,7 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const jpeg = require('jpeg-js');
-const { ClimateController } = require('./automation');
+const { UniversalClimateEngine } = require('./automation');
+const store = require('./store');
 
 // Configuration
 const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
@@ -16,7 +17,7 @@ const MQTT_USER = process.env.MQTT_USER || 'growbox_bridge';
 const MQTT_PASSWORD = process.env.MQTT_PASSWORD || 'growbox_bridge_secret';
 const MQTT_WEB_USER = process.env.MQTT_WEB_USER || 'growbox_web';
 const MQTT_WEB_PASSWORD = process.env.MQTT_WEB_PASSWORD || 'growbox_web_secret';
-const PUBLIC_TELEMETRY = process.env.PUBLIC_TELEMETRY === 'true';
+const PUBLIC_TELEMETRY = process.env.PUBLIC_TELEMETRY !== 'false';
 const INFLUXDB_URL = process.env.INFLUXDB_URL || 'http://localhost:8086';
 const INFLUXDB_TOKEN = process.env.INFLUXDB_TOKEN || 'growbox-super-secret-token';
 const INFLUXDB_ORG = process.env.INFLUXDB_ORG || 'growbox';
@@ -24,60 +25,48 @@ const INFLUXDB_BUCKET = process.env.INFLUXDB_BUCKET || 'sensors';
 const BRIDGE_PORT = process.env.BRIDGE_PORT || 3001;
 const IMAGES_DIR = process.env.IMAGES_DIR || './images';
 
-// Ensure images directory exists
-if (!fs.existsSync(IMAGES_DIR)) {
-  fs.mkdirSync(IMAGES_DIR, { recursive: true });
-}
+if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
-// InfluxDB Setup
 const influxDB = new InfluxDB({ url: INFLUXDB_URL, token: INFLUXDB_TOKEN });
 const writeApi = influxDB.getWriteApi(INFLUXDB_ORG, INFLUXDB_BUCKET);
 writeApi.useDefaultTags({ location: 'growbox' });
 
-// MQTT Setup with Authentication
 const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
   username: MQTT_USER,
   password: MQTT_PASSWORD,
   clientId: `growbox_bridge_${Math.random().toString(16).slice(2, 8)}`
 });
 
-// Climate Controller State Machine
-const climate = new ClimateController(mqttClient);
+const climate = new UniversalClimateEngine(mqttClient, store);
 
 mqttClient.on('connect', () => {
-  console.log(`[${new Date().toISOString()}] Connected to MQTT broker at ${MQTT_HOST}:${MQTT_PORT}`);
-  mqttClient.subscribe('growbox/sensors', (err) => {
-    if (!err) console.log(`[${new Date().toISOString()}] Subscribed to growbox/sensors`);
-  });
-  mqttClient.subscribe('growbox/status', (err) => {
-    if (!err) console.log(`[${new Date().toISOString()}] Subscribed to growbox/status`);
-  });
-  mqttClient.subscribe('growbox/image/raw', (err) => {
-    if (!err) console.log(`[${new Date().toISOString()}] Subscribed to growbox/image/raw`);
-  });
+  console.log(`[${new Date().toISOString()}] Connected to MQTT broker`);
+  mqttClient.subscribe('growbox/sensors');
+  mqttClient.subscribe('growbox/status');
+  mqttClient.subscribe('growbox/image/raw');
+});
+
+mqttClient.on('reconnect', () => {
+  console.log(`[${new Date().toISOString()}] Reconnecting to MQTT broker...`);
 });
 
 mqttClient.on('error', (err) => {
-  console.error(`[${new Date().toISOString()}] MQTT Connection Error:`, err.message);
+  console.error(`[${new Date().toISOString()}] [MQTT ERR]`, err.message || err);
 });
 
-// Helper for YUY2 to RGBA conversion
+mqttClient.on('close', () => {
+  // MQTT connection closed, will automatically reconnect
+});
+
 function yuy2ToRgba(yuy2Buffer, width, height) {
   const rgba = Buffer.alloc(width * height * 4);
   for (let i = 0, j = 0; i < yuy2Buffer.length; i += 4, j += 8) {
-    const y0 = yuy2Buffer[i];
-    const u = yuy2Buffer[i + 1];
-    const y1 = yuy2Buffer[i + 2];
-    const v = yuy2Buffer[i + 3];
-    
-    const c0 = y0 - 16, c1 = y1 - 16;
-    const d = u - 128, e = v - 128;
-    
+    const y0 = yuy2Buffer[i], u = yuy2Buffer[i + 1], y1 = yuy2Buffer[i + 2], v = yuy2Buffer[i + 3];
+    const c0 = y0 - 16, c1 = y1 - 16, d = u - 128, e = v - 128;
     rgba[j]   = Math.max(0, Math.min(255, (298 * c0 + 409 * e + 128) >> 8));
     rgba[j+1] = Math.max(0, Math.min(255, (298 * c0 - 100 * d - 208 * e + 128) >> 8));
     rgba[j+2] = Math.max(0, Math.min(255, (298 * c0 + 516 * d + 128) >> 8));
     rgba[j+3] = 255;
-    
     rgba[j+4] = Math.max(0, Math.min(255, (298 * c1 + 409 * e + 128) >> 8));
     rgba[j+5] = Math.max(0, Math.min(255, (298 * c1 - 100 * d - 208 * e + 128) >> 8));
     rgba[j+6] = Math.max(0, Math.min(255, (298 * c1 + 516 * d + 128) >> 8));
@@ -86,16 +75,14 @@ function yuy2ToRgba(yuy2Buffer, width, height) {
   return rgba;
 }
 
+let latestSensorsSnapshot = {};
+
 mqttClient.on('message', async (topic, message) => {
   try {
     if (topic === 'growbox/sensors') {
       const data = JSON.parse(message.toString());
+      latestSensorsSnapshot = data; // Cache for image metadata
       const point = new Point('sensor_data');
-
-      // The firmware reports "no data" as -999 (and may also send null/NaN).
-      // Writing that sentinel as a real measurement poisons the time series, so
-      // only valid channels are stored; offline ones are simply left out and
-      // counted in sensors_online.
       const valid = (v) => typeof v === 'number' && Number.isFinite(v) && v !== -999;
       const channels = [
         ['air_temp', 'air_temp_ok', 'float'],
@@ -104,134 +91,74 @@ mqttClient.on('message', async (topic, message) => {
         ['substrate_temp', 'substrate_temp_ok', 'float'],
         ['co2_ppm', 'co2_ok', 'int']
       ];
-
-      const offline = [];
       let online = 0;
-
       for (const [field, flag, kind] of channels) {
         const value = data[field];
         const ok = (data[flag] === undefined) ? valid(value) : (data[flag] === true && valid(value));
         if (ok) {
-          if (kind === 'int') {
-            point.intField(field, Math.round(value));
-          } else {
-            point.floatField(field, value);
-          }
+          if (kind === 'int') point.intField(field, Math.round(value));
+          else point.floatField(field, value);
           online++;
-        } else {
-          offline.push(field);
         }
       }
-
       point.intField('sensors_online', online);
       point.intField('sensors_total', channels.length);
-      if (data.i2c_devices) point.stringField('i2c_devices', String(data.i2c_devices));
-      if (data.diag) point.stringField('diag', String(data.diag).slice(0, 512));
-
       writeApi.writePoint(point);
-
-      if (offline.length) {
-        console.warn(`[${new Date().toISOString()}] Sensor channels offline (${offline.join(', ')}). diag: ${data.diag || 'n/a'}`);
-      } else {
-        console.log(`[${new Date().toISOString()}] Sensor data written to InfluxDB:`, data);
-      }
-
-      // Feed to intelligent climate controller
       climate.processSensors(data);
     } 
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
       const point = new Point('relay_status');
-      // data.relays = [false, false, false, false, false, false]
       if (Array.isArray(data.relays)) {
         const names = ['humidifier','heater','heater_fan','fan1','fan2','backlight'];
-        data.relays.forEach((state, i) => {
-          point.booleanField(names[i], state);
-        });
+        data.relays.forEach((state, i) => point.booleanField(names[i], state));
       }
-      if (data.uptime_s  !== undefined) point.intField('uptime_s',  data.uptime_s);
-      if (data.wifi_rssi !== undefined) point.intField('wifi_rssi', data.wifi_rssi);
-      if (data.free_heap !== undefined) point.intField('free_heap', data.free_heap);
-      
       writeApi.writePoint(point);
-      console.log(`[${new Date().toISOString()}] Status data written to InfluxDB:`, data);
-
-      // Feed to intelligent climate controller
       climate.updateHardwareStatus(data);
     }
     else if (topic === 'growbox/image/raw') {
-      console.log(`[${new Date().toISOString()}] Received raw image data, size: ${message.length} bytes`);
-      
       let base64Str = message.toString();
-      let width = 160;
-      let height = 120;
-
+      let width = 160, height = 120;
       if (base64Str.startsWith('{')) {
         try {
           const parsed = JSON.parse(base64Str);
           if (parsed.data) base64Str = parsed.data;
           if (parsed.width) width = parsed.width;
           if (parsed.height) height = parsed.height;
-        } catch (e) {
-          console.error(`[${new Date().toISOString()}] Failed to parse image JSON:`, e.message);
-        }
+        } catch (e) {}
       }
-
       const yuy2Buffer = Buffer.from(base64Str, 'base64');
-      
-      if (yuy2Buffer.length !== width * height * 2) {
-        console.error(`[${new Date().toISOString()}] Invalid YUY2 buffer length: expected ${width * height * 2}, got ${yuy2Buffer.length}`);
-        return;
-      }
-      
+      if (yuy2Buffer.length !== width * height * 2) return;
       const rgbaBuffer = yuy2ToRgba(yuy2Buffer, width, height);
       
-      const pad = (n) => String(n).padStart(2, '0');
-      const now = new Date();
-      const y = now.getFullYear();
-      const m = pad(now.getMonth() + 1);
-      const d = pad(now.getDate());
-      const hh = pad(now.getHours());
-      const mm = pad(now.getMinutes());
-      const ss = pad(now.getSeconds());
-      const filename = `${y}-${m}-${d}_${hh}-${mm}-${ss}.jpg`;
+      const filename = `${new Date().toISOString().replace(/[:\.]/g, '-')}.jpg`;
       const filepath = path.join(IMAGES_DIR, filename);
-      
-      const jpegData = jpeg.encode({
-        data: rgbaBuffer,
-        width: width,
-        height: height
-      }, 85);
-      
+      const jpegData = jpeg.encode({ data: rgbaBuffer, width, height }, 85);
       fs.writeFileSync(filepath, jpegData.data);
-      console.log(`[${new Date().toISOString()}] Image saved to ${filepath}`);
-
+      
+      store.addPhoto({
+        filename,
+        box_id: 'box_a',
+        sensors: latestSensorsSnapshot,
+        actuators: {} // we could pass relays here
+      });
+      
       const photoPoint = new Point('camera_capture')
         .stringField('filename', filename)
         .intField('size_bytes', jpegData.data.length)
         .intField('width', width)
         .intField('height', height);
       writeApi.writePoint(photoPoint);
-      console.log(`[${new Date().toISOString()}] Camera capture recorded in InfluxDB: ${filename}`);
     }
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error processing MQTT message on topic ${topic}:`, err.message);
-  }
+  } catch (err) {}
 });
 
-// Flush InfluxDB periodically to avoid memory leaks
-setInterval(() => {
-  writeApi.flush().catch(err => {
-    console.error(`[${new Date().toISOString()}] Error flushing InfluxDB:`, err);
-  });
-}, 10000);
+setInterval(() => { writeApi.flush().catch(() => {}); }, 10000);
 
-// Express App setup
 const app = express();
-app.use(cors()); // Разрешаем CORS для локальной разработки
+app.use(cors());
 app.use(express.json());
 
-// PIN Authentication, Brute-force Protection & Session Management
 const ADMIN_PIN = process.env.ADMIN_PIN || '2212';
 const activeSessions = new Set();
 const loginAttempts = new Map(); // ip -> { count, lockedUntil }
@@ -245,8 +172,7 @@ function getClientIp(req) {
 function checkRateLimit(ip) {
   const record = loginAttempts.get(ip);
   if (record && record.lockedUntil && Date.now() < record.lockedUntil) {
-    const waitSec = Math.ceil((record.lockedUntil - Date.now()) / 1000);
-    return { locked: true, waitSec };
+    return { locked: true, waitSec: Math.ceil((record.lockedUntil - Date.now()) / 1000) };
   }
   return { locked: false };
 }
@@ -259,10 +185,6 @@ function recordFailedLogin(ip) {
     record.count = 0;
   }
   loginAttempts.set(ip, record);
-}
-
-function recordSuccessfulLogin(ip) {
-  loginAttempts.delete(ip);
 }
 
 function timingSafeCompare(a, b) {
@@ -278,192 +200,120 @@ app.post('/api/auth/verify', (req, res) => {
   if (locked) {
     return res.status(429).json({
       success: false,
-      error: `Слишком много неверных попыток ввода PIN. Доступ заблокирован на ${Math.ceil(waitSec / 60)} мин.`
+      error: `Слишком много попыток. Доступ заблокирован на ${Math.ceil(waitSec / 60)} мин.`
     });
   }
-
   const { pin } = req.body;
-  if (!pin) {
-    return res.status(400).json({ success: false, error: 'PIN is required' });
-  }
-
+  if (!pin) return res.status(400).json({ success: false, error: 'PIN required' });
   if (timingSafeCompare(pin, ADMIN_PIN)) {
-    recordSuccessfulLogin(ip);
+    loginAttempts.delete(ip);
     const token = Buffer.from(`${Date.now()}_${Math.random()}`).toString('base64');
     activeSessions.add(token);
-    setTimeout(() => activeSessions.delete(token), 3600000); // 1 hour token lifetime
+    setTimeout(() => activeSessions.delete(token), 3600000);
     return res.json({
       success: true,
       token,
-      mqtt: {
-        username: MQTT_WEB_USER,
-        password: MQTT_WEB_PASSWORD
-      }
+      mqtt: { username: MQTT_WEB_USER, password: MQTT_WEB_PASSWORD }
     });
   }
-
   recordFailedLogin(ip);
-  // Artificial 500ms delay to thwart rapid-fire automated brute force
   setTimeout(() => {
     const attemptsLeft = 5 - ((loginAttempts.get(ip)?.count) || 0);
     return res.status(401).json({
       success: false,
-      error: attemptsLeft > 0 ? `Неверный PIN-код. Осталось попыток: ${attemptsLeft}` : 'Неверный PIN-код. Превышен лимит попыток: доступ заблокирован на 15 минут.'
+      error: attemptsLeft > 0
+        ? `Неверный PIN-код. Осталось попыток: ${attemptsLeft}`
+        : 'Превышен лимит попыток. Доступ заблокирован на 15 минут.'
     });
   }, 500);
 });
 
-// Authentication Guard Middleware
 function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
-  const queryToken = req.query ? req.query.token : null;
-  const token = (authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null) || queryToken;
-  if (!token || !activeSessions.has(token)) {
-    return res.status(401).json({ success: false, error: 'Unauthorized: valid PIN session token required' });
-  }
+  const token = (authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null) || (req.query ? req.query.token : null);
+  if (!token || !activeSessions.has(token)) return res.status(401).json({ success: false, error: 'Unauthorized' });
   next();
 }
 
-// Telemetry & Images Access Guard
 function requireTelemetryAuth(req, res, next) {
   if (PUBLIC_TELEMETRY) return next();
   return requireAuth(req, res, next);
 }
 
-// Check current session status and telemetry permissions
 app.get('/api/auth/session', (req, res) => {
   const authHeader = req.headers['authorization'] || req.headers['x-session-token'];
   const queryToken = req.query ? req.query.token : null;
   const token = (authHeader ? authHeader.replace(/^Bearer\s+/i, '').trim() : null) || queryToken;
   const isValid = token && activeSessions.has(token);
-
   if (isValid) {
     return res.json({
       authenticated: true,
       public_telemetry: PUBLIC_TELEMETRY,
-      mqtt: {
-        username: MQTT_WEB_USER,
-        password: MQTT_WEB_PASSWORD
-      }
+      mqtt: { username: MQTT_WEB_USER, password: MQTT_WEB_PASSWORD }
     });
   }
-
   if (PUBLIC_TELEMETRY) {
     return res.json({
       authenticated: false,
       public_telemetry: true,
-      mqtt: {
-        username: MQTT_WEB_USER,
-        password: MQTT_WEB_PASSWORD
-      }
+      mqtt: { username: MQTT_WEB_USER, password: MQTT_WEB_PASSWORD }
     });
   }
-
-  return res.json({
-    authenticated: false,
-    public_telemetry: false
-  });
+  return res.json({ authenticated: false, public_telemetry: false });
 });
 
-// Relay Control REST API (Requires valid PIN session)
+// Old APIs
 app.post('/api/relay', requireAuth, (req, res) => {
   const { relay, state } = req.body;
-  if (typeof relay !== 'number' || typeof state !== 'boolean' || relay < 1 || relay > 6) {
-    return res.status(400).json({ success: false, error: 'Invalid relay (1-6) or state (boolean)' });
-  }
-  const payload = JSON.stringify({ relay, state });
-  mqttClient.publish('growbox/relay/set', payload);
-  console.log(`[${new Date().toISOString()}] Relay ${relay} set to ${state} via authenticated REST API`);
+  mqttClient.publish('growbox/relay/set', JSON.stringify({ relay, state }));
   res.json({ success: true, relay, state });
 });
-
-// Climate Controller REST API
-app.get('/api/climate', requireTelemetryAuth, (req, res) => {
-  res.json(climate.getState());
-});
-
-app.post('/api/climate/mode', requireAuth, (req, res) => {
-  try {
-    const { mode } = req.body;
-    if (!mode) return res.status(400).json({ error: 'Missing mode parameter' });
-    const state = climate.setMode(mode);
-    res.json({ success: true, state });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-app.post('/api/climate/setpoints', requireAuth, (req, res) => {
-  try {
-    const { mode, setpoints } = req.body;
-    if (!mode || !setpoints) return res.status(400).json({ error: 'Missing mode or setpoints parameter' });
-    const updated = climate.updateProfileSetpoints(mode, setpoints);
-    res.json({ success: true, profile: updated });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', climate_mode: climate.mode });
-});
-
-// Ручка для принудительного снимка с камеры (требует авторизации)
-app.post('/api/capture', requireAuth, (req, res) => {
-  mqttClient.publish('growbox/camera/capture', '1');
-  console.log(`[${new Date().toISOString()}] Triggered on-demand camera capture via /api/capture`);
-  res.json({ status: 'capture_triggered' });
-});
-
+app.get('/api/climate', requireTelemetryAuth, (req, res) => res.json(climate.getState()));
+app.post('/api/climate/mode', requireAuth, (req, res) => res.json({ success: true, state: climate.setMode(req.body.mode) }));
+app.post('/api/climate/setpoints', requireAuth, (req, res) => res.json({ success: true, profile: climate.updateProfileSetpoints(req.body.mode, req.body.setpoints) }));
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.post('/api/capture', requireAuth, (req, res) => { mqttClient.publish('growbox/camera/capture', '1'); res.json({ status: 'capture_triggered' }); });
 app.get('/api/images', requireTelemetryAuth, (req, res) => {
   fs.readdir(IMAGES_DIR, (err, files) => {
-    if (err) {
-      console.error(`[${new Date().toISOString()}] Error reading images directory:`, err);
-      return res.status(500).json({ error: 'Failed to read images directory' });
-    }
-    const images = files.filter(f => f.endsWith('.jpg') || f.endsWith('.png')).sort().reverse();
-    res.json(images);
+    if (err) return res.status(500).json({ error: 'Failed to read' });
+    res.json(files.filter(f => f.endsWith('.jpg')).sort().reverse());
   });
 });
-
-app.get('/api/images/:filename', requireTelemetryAuth, (req, res) => {
-  const filepath = path.join(IMAGES_DIR, req.params.filename);
-  if (fs.existsSync(filepath)) {
-    res.sendFile(path.resolve(filepath));
-  } else {
-    res.status(404).json({ error: 'Image not found' });
-  }
-});
-
+app.get('/api/images/:filename', requireTelemetryAuth, (req, res) => res.sendFile(path.resolve(path.join(IMAGES_DIR, req.params.filename))));
 app.get('/api/latest-image', requireTelemetryAuth, (req, res) => {
   fs.readdir(IMAGES_DIR, (err, files) => {
-    if (err) {
-      console.error(`[${new Date().toISOString()}] Error reading images directory:`, err);
-      return res.status(500).json({ error: 'Failed to read images directory' });
-    }
-    const images = files.filter(f => f.endsWith('.jpg') || f.endsWith('.png')).sort().reverse();
-    if (images.length > 0) {
-      const filepath = path.join(IMAGES_DIR, images[0]);
-      res.sendFile(path.resolve(filepath));
-    } else {
-      res.status(404).json({ error: 'No images found' });
-    }
+    const images = files.filter(f => f.endsWith('.jpg')).sort().reverse();
+    if (images.length) res.sendFile(path.resolve(path.join(IMAGES_DIR, images[0])));
+    else res.status(404).json({ error: 'Not found' });
   });
 });
 
-app.listen(BRIDGE_PORT, () => {
-  console.log(`[${new Date().toISOString()}] Bridge service listening on port ${BRIDGE_PORT}`);
+// New REST APIs
+app.get('/api/profiles', requireTelemetryAuth, (req, res) => res.json(store.getProfiles()));
+app.post('/api/profiles', requireAuth, (req, res) => res.json(store.createProfile(req.body)));
+app.get('/api/profiles/:id', requireTelemetryAuth, (req, res) => res.json(store.getProfile(req.params.id)));
+app.put('/api/profiles/:id', requireAuth, (req, res) => res.json(store.updateProfile(req.params.id, req.body)));
+app.post('/api/profiles/:id/clone', requireAuth, (req, res) => res.json(store.cloneProfile(req.params.id, req.body)));
+app.delete('/api/profiles/:id', requireAuth, (req, res) => res.json(store.deleteProfile(req.params.id)));
+app.get('/api/profiles/:id/export', requireAuth, (req, res) => res.json(store.exportProfile(req.params.id)));
+app.post('/api/profiles/import', requireAuth, (req, res) => res.json(store.importProfile(req.body)));
+
+app.get('/api/boxes', requireTelemetryAuth, (req, res) => res.json(store.getBoxes()));
+app.post('/api/boxes', requireAuth, (req, res) => res.json(store.createBox(req.body)));
+
+app.get('/api/cycles', requireTelemetryAuth, (req, res) => res.json(store.getCycles(req.query)));
+app.post('/api/cycles/start', requireAuth, (req, res) => res.json(store.startCycle(req.body)));
+app.get('/api/cycles/:id', requireTelemetryAuth, (req, res) => res.json(store.getCycle(req.params.id)));
+app.post('/api/cycles/:id/stage', requireAuth, (req, res) => res.json(store.setStage(req.params.id, req.body.stage_id)));
+app.post('/api/cycles/:id/harvest', requireAuth, (req, res) => res.json(store.addHarvest(req.params.id, req.body)));
+app.post('/api/cycles/:id/complete', requireAuth, (req, res) => res.json(store.completeCycle(req.params.id, req.body.status)));
+
+app.post('/api/settings/intervals', requireAuth, (req, res) => {
+  mqttClient.publish('growbox/config/set', JSON.stringify(req.body));
+  res.json({ success: true });
 });
 
-// Handle graceful shutdown
-process.on('SIGINT', async () => {
-  console.log(`[${new Date().toISOString()}] Shutting down...`);
-  try {
-    await writeApi.close();
-    console.log(`[${new Date().toISOString()}] InfluxDB write API closed`);
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error closing InfluxDB write API:`, err);
-  }
-  mqttClient.end();
-  process.exit(0);
-});
+app.get('/api/export/dataset', requireAuth, (req, res) => res.json(store.exportDataset()));
+
+app.listen(BRIDGE_PORT, () => console.log(`[${new Date().toISOString()}] Bridge service listening on port ${BRIDGE_PORT}`));
+process.on('SIGINT', async () => { await writeApi.close(); mqttClient.end(); process.exit(0); });
