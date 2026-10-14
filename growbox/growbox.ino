@@ -21,24 +21,54 @@ void logMsg(const String &msg) {
 }
 
 bool setup_wifi() {
-  logMsg("[WIFI] Connecting to " + String(WIFI_SSID) + "...");
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
 
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
+  struct WifiNetwork {
+    const char* ssid;
+    const char* pass;
+  };
 
-  if (WiFi.status() == WL_CONNECTED) {
-    logMsg("[WIFI OK] Connected! IP: " + WiFi.localIP().toString() + " RSSI: " + String(WiFi.RSSI()) + " dBm");
-    return true;
-  } else {
-    logMsg("[WIFI WARN] Connection timed out! Will retry in background.");
-    return false;
+  const WifiNetwork networks[] = {
+#ifdef WIFI_SSID_1
+    { WIFI_SSID_1, WIFI_PASSWORD_1 },
+#endif
+#ifdef WIFI_SSID_2
+    { WIFI_SSID_2, WIFI_PASSWORD_2 },
+#endif
+#if !defined(WIFI_SSID_1) && defined(WIFI_SSID)
+    { WIFI_SSID, WIFI_PASSWORD },
+#endif
+  };
+
+  const size_t num_networks = sizeof(networks) / sizeof(networks[0]);
+
+  for (size_t i = 0; i < num_networks; i++) {
+    logMsg("[WIFI] Connecting to network " + String(i + 1) + "/" + String(num_networks) + " (" + String(networks[i].ssid) + ")...");
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.begin(networks[i].ssid, networks[i].pass);
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 12000) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      logMsg("[WIFI OK] Connected to " + String(networks[i].ssid) +
+             "! IP: " + WiFi.localIP().toString() +
+             " RSSI: " + String(WiFi.RSSI()) + " dBm");
+      return true;
+    } else {
+      logMsg("[WIFI] Could not connect to " + String(networks[i].ssid) + " (status: " + String(WiFi.status()) + ")");
+    }
   }
+
+  logMsg("[WIFI WARN] All configured networks failed! Will retry in background.");
+  return false;
 }
 
 void setup() {
