@@ -177,14 +177,7 @@ mqttClient.on('message', async (topic, message) => {
         }
       }
 
-      const yuy2Buffer = Buffer.from(base64Str, 'base64');
-      
-      if (yuy2Buffer.length !== width * height * 2) {
-        console.error(`[${new Date().toISOString()}] Invalid YUY2 buffer length: expected ${width * height * 2}, got ${yuy2Buffer.length}`);
-        return;
-      }
-      
-      const rgbaBuffer = yuy2ToRgba(yuy2Buffer, width, height);
+      const imgBuffer = Buffer.from(base64Str, 'base64');
       
       const pad = (n) => String(n).padStart(2, '0');
       const now = new Date();
@@ -196,19 +189,32 @@ mqttClient.on('message', async (topic, message) => {
       const ss = pad(now.getSeconds());
       const filename = `${y}-${m}-${d}_${hh}-${mm}-${ss}.jpg`;
       const filepath = path.join(IMAGES_DIR, filename);
-      
-      const jpegData = jpeg.encode({
-        data: rgbaBuffer,
-        width: width,
-        height: height
-      }, 85);
-      
-      fs.writeFileSync(filepath, jpegData.data);
-      console.log(`[${new Date().toISOString()}] Image saved to ${filepath}`);
+
+      if (imgBuffer.length > 4 && imgBuffer[0] === 0xFF && imgBuffer[1] === 0xD8) {
+        // Native JPEG from hardware camera (OV2640 / esp_camera)
+        fs.writeFileSync(filepath, imgBuffer);
+        console.log(`[${new Date().toISOString()}] Native JPEG saved to ${filepath} (${imgBuffer.length} bytes, ${width}x${height})`);
+      } else {
+        // Legacy YUY2 raw buffer conversion
+        if (imgBuffer.length !== width * height * 2) {
+          console.error(`[${new Date().toISOString()}] Invalid YUY2 buffer length: expected ${width * height * 2}, got ${imgBuffer.length}`);
+          return;
+        }
+        
+        const rgbaBuffer = yuy2ToRgba(imgBuffer, width, height);
+        const jpegData = jpeg.encode({
+          data: rgbaBuffer,
+          width: width,
+          height: height
+        }, 85);
+        
+        fs.writeFileSync(filepath, jpegData.data);
+        console.log(`[${new Date().toISOString()}] YUY2 converted to JPEG and saved to ${filepath}`);
+      }
 
       const photoPoint = new Point('camera_capture')
         .stringField('filename', filename)
-        .intField('size_bytes', jpegData.data.length)
+        .intField('size_bytes', imgBuffer.length)
         .intField('width', width)
         .intField('height', height);
       writeApi.writePoint(photoPoint);
