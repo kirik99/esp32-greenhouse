@@ -12,13 +12,10 @@
 // =========================================================================
 // I2C Pin Configuration for BME280
 // =========================================================================
-// STATUS: UNCONFIRMED
-// Note: On ESP32-S3 CAM boards, GPIO 16 and 17 are normally routed to the
-// camera parallel DVP interface (Y8/Y9 or Y2/Y3).
-// If physically wired to 16 and 17, set them here.
-// Common breakout header pins free from camera conflicts are GPIO 1 (SDA) and GPIO 2 (SCL).
-#define UNCONFIRMED_I2C_SDA     16  // [UNCONFIRMED] candidate SDA pin
-#define UNCONFIRMED_I2C_SCL     17  // [UNCONFIRMED] candidate SCL pin
+// Status: Candidate under verification
+// Free general-purpose breakout header pins: GPIO 1 (SDA) and GPIO 2 (SCL).
+#define UNCONFIRMED_I2C_SDA     1  // SDA set to GPIO 1
+#define UNCONFIRMED_I2C_SCL     2  // SCL set to GPIO 2
 
 // Target I2C addresses for BME280
 #define BME280_PRIMARY_ADDR     0x76

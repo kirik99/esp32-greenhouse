@@ -16,12 +16,13 @@ struct I2CPinPair {
 };
 
 static const I2CPinPair CANDIDATE_PINS[] = {
-  { UNCONFIRMED_I2C_SDA, UNCONFIRMED_I2C_SCL, "Configured UNCONFIRMED pins" },
-  { 1,  2, "General Breakout Header GPIO 1 / 2" },
-  { 2,  1, "General Breakout Header GPIO 2 / 1" },
+  { UNCONFIRMED_I2C_SDA, UNCONFIRMED_I2C_SCL, "Configured pins" },
+  { 1,  2, "Header SDA=1, SCL=2" },
+  { 2,  1, "Header SDA=2, SCL=1" },
+  { 1, 16, "Header SDA=1, SCL=16" },
+  { 1, 17, "Header SDA=1, SCL=17" },
   { 8,  9, "ESP32-S3 Core Default SDA=8, SCL=9" },
   { 4,  5, "Camera SCCB Bus SDA=4, SCL=5" },
-  { 17, 16, "Reversed Candidate GPIO 17 / 16" },
   { 41, 42, "High Header GPIO 41 / 42" },
 };
 static const size_t NUM_CANDIDATE_PINS = sizeof(CANDIDATE_PINS) / sizeof(CANDIDATE_PINS[0]);
