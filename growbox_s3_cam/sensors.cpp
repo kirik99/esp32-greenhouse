@@ -13,10 +13,10 @@ Adafruit_BME280 bme;
 static uint8_t bme_addr = 0x76;
 static int bme_fail_streak = 0;
 
-// DS18B20 (substrate temperature) on OneWire
-OneWire oneWire(PIN_DS18B20);
-DallasTemperature ds18b20(&oneWire);
+// DS18B20 (substrate temperature) on GPIO 41
 static int current_ds_pin = PIN_DS18B20;
+static OneWire oneWire(PIN_DS18B20);
+static DallasTemperature ds18b20(&oneWire);
 
 // MH-Z19B (CO2) on Serial1
 static bool mhz19_abc_pending = true;
@@ -67,10 +67,10 @@ static void i2c_bus_begin(int sda, int scl) {
   if (wire_started) {
     Wire.end();
     wire_started = false;
-    delay(10);
+    delay(20);
   }
-  Wire.begin(sda, scl);
-  Wire.setClock(100000);
+  Wire.setPins(sda, scl);
+  Wire.begin(sda, scl, 100000);
   Wire.setTimeOut(50);
   wire_started = true;
   i2c_sda_active = sda;
@@ -78,36 +78,16 @@ static void i2c_bus_begin(int sda, int scl) {
   delay(50);
 }
 
-static bool i2c_probe(uint8_t addr) {
-  Wire.beginTransmission(addr);
-  return Wire.endTransmission(true) == 0;  // true == device ACKed
-}
-
-// The MatrixPortal S3 carries an onboard LIS3DH accelerometer at 0x19 on the very
-// same STEMMA QT bus, so an ACK at 0x19 proves that the bus itself is alive even
-// when the BME280 is missing or miswired.
-static const uint8_t I2C_QUICK_PROBE[] = {0x19, 0x76, 0x77, 0x38, 0x40, 0x44, 0x48, 0x3C, 0x68, 0x5C};
-
-static String i2c_scan_full() {
-  String found;
-  for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
-    if (!i2c_probe(addr)) continue;
-    if (found.length()) found += ",";
-    found += hexByte(addr);
-  }
-  return found.length() ? found : String("none");
-}
-
-// Probe the interesting addresses first. If literally nothing answers (not even
-// the onboard accelerometer) the bus is dead / unpowered, and a 100+ address
-// sweep would only stall the main loop for several seconds.
 static String i2c_scan_smart() {
-  for (uint8_t addr : I2C_QUICK_PROBE) {
-    if (i2c_probe(addr)) {
-      return i2c_scan_full();
+  String found = "";
+  for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      if (found.length()) found += ",";
+      found += hexByte(addr);
     }
   }
-  return String("none");
+  return found.length() ? found : String("none");
 }
 
 // Result of an init attempt, so the dashboard can tell "nothing on the bus" apart
@@ -169,21 +149,143 @@ static BmeInitResult bme_init_on_bus(int sda, int scl) {
 }
 
 // ---------------------------------------------------------------------------
-// DS18B20 helpers
+// Dedicated I2C Bus Detection for BME280 (SDA=GPIO 1, SCL=GPIO 2)
 // ---------------------------------------------------------------------------
 
-int autodetect_ds18b20() {
-  const int candidate_pins[] = {PIN_DS18B20};
-  for (int p : candidate_pins) {
-    if (p == i2c_sda_active || p == i2c_scl_active) continue;
-    pinMode(p, INPUT_PULLUP);
-    OneWire testOw(p);
-    if (testOw.reset() == 1) {
-      Serial.printf("[SENSORS] DS18B20 detected on GPIO %d!\n", p);
-      return p;
+static BmeInitResult autodetect_bme280() {
+  // First try the configured primary pair
+  if (bme_init_on_bus(PIN_SDA, PIN_SCL) == BME_INIT_OK) {
+    return BME_INIT_OK;
+  }
+  // Try swapped primary pair (in case SDA/SCL wires are inverted)
+  if (bme_init_on_bus(PIN_SCL, PIN_SDA) == BME_INIT_OK) {
+    return BME_INIT_OK;
+  }
+
+  // Fall back to default bus
+  i2c_bus_begin(PIN_SDA, PIN_SCL);
+  return BME_INIT_NOT_FOUND;
+}
+
+// ---------------------------------------------------------------------------
+// Native ESP32-S3 Hardware Open-Drain 1-Wire / DS18B20 Driver
+// ---------------------------------------------------------------------------
+
+static void ds18b20_hw_init(int pin) {
+  gpio_config_t io_conf = {};
+  io_conf.intr_type = GPIO_INTR_DISABLE;
+  io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
+  io_conf.pin_bit_mask = (1ULL << pin);
+  io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+  gpio_config(&io_conf);
+  gpio_set_level((gpio_num_t)pin, 1);
+  delay(10);
+}
+
+static inline void ds18b20_low(int pin) {
+  gpio_set_level((gpio_num_t)pin, 0);
+}
+
+static inline void ds18b20_high(int pin) {
+  gpio_set_level((gpio_num_t)pin, 1);
+}
+
+static inline int ds18b20_read_level(int pin) {
+  return gpio_get_level((gpio_num_t)pin);
+}
+
+static bool ds18b20_reset_pulse(int pin) {
+  ds18b20_high(pin);
+  delayMicroseconds(5);
+
+  ds18b20_low(pin);
+  delayMicroseconds(480);
+
+  noInterrupts();
+  ds18b20_high(pin);
+  delayMicroseconds(70);
+  int presence = !ds18b20_read_level(pin);
+  interrupts();
+
+  delayMicroseconds(410);
+  ds18b20_high(pin);
+
+  return presence == 1;
+}
+
+static void ds18b20_write_bit(int pin, int bit) {
+  if (bit) {
+    noInterrupts();
+    ds18b20_low(pin);
+    delayMicroseconds(6);
+    ds18b20_high(pin);
+    interrupts();
+    delayMicroseconds(64);
+  } else {
+    noInterrupts();
+    ds18b20_low(pin);
+    delayMicroseconds(60);
+    ds18b20_high(pin);
+    interrupts();
+    delayMicroseconds(10);
+  }
+}
+
+static int ds18b20_read_bit(int pin) {
+  noInterrupts();
+  ds18b20_low(pin);
+  delayMicroseconds(3);
+  ds18b20_high(pin);
+  delayMicroseconds(10);
+  int bit = ds18b20_read_level(pin);
+  interrupts();
+  delayMicroseconds(53);
+  return bit;
+}
+
+static void ds18b20_write_byte(int pin, uint8_t byte) {
+  for (int i = 0; i < 8; i++) {
+    ds18b20_write_bit(pin, (byte >> i) & 1);
+  }
+}
+
+static uint8_t ds18b20_read_byte(int pin) {
+  uint8_t byte = 0;
+  for (int i = 0; i < 8; i++) {
+    if (ds18b20_read_bit(pin)) {
+      byte |= (1 << i);
     }
   }
-  return PIN_DS18B20;
+  return byte;
+}
+
+static float ds18b20_read_temp_c(int pin) {
+  // 1. Reset & start conversion
+  if (!ds18b20_reset_pulse(pin)) {
+    return -999.0f;
+  }
+  ds18b20_write_byte(pin, 0xCC); // Skip ROM
+  ds18b20_write_byte(pin, 0x44); // Convert T
+
+  // Wait conversion time (750ms for 12-bit)
+  delay(750);
+
+  // 2. Reset & read scratchpad
+  if (!ds18b20_reset_pulse(pin)) {
+    return -999.0f;
+  }
+  ds18b20_write_byte(pin, 0xCC); // Skip ROM
+  ds18b20_write_byte(pin, 0xBE); // Read Scratchpad
+  uint8_t lsb = ds18b20_read_byte(pin);
+  uint8_t msb = ds18b20_read_byte(pin);
+
+  int16_t raw = (int16_t)((msb << 8) | lsb);
+  float temp_c = (float)raw / 16.0f;
+  if (temp_c > -55.0f && temp_c < 125.0f) {
+    return temp_c;
+  }
+  return -999.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,46 +293,27 @@ int autodetect_ds18b20() {
 // ---------------------------------------------------------------------------
 
 void setup_sensors() {
-  BmeInitResult bme_result = bme_init_on_bus(PIN_SDA, PIN_SCL);
+  BmeInitResult bme_result = autodetect_bme280();
   sensor_bme_ok = (bme_result == BME_INIT_OK);
   sensor_bme_status = bme_init_status(bme_result);
 
-#if I2C_FALLBACK_ENABLED
-  // Early revisions of this project wired the BME280 to GPIO 6/7. Try that pair
-  // so an existing harness keeps working, but shout about it.
-  if (!sensor_bme_ok && (PIN_I2C_FALLBACK_SDA != PIN_SDA || PIN_I2C_FALLBACK_SCL != PIN_SCL)) {
-    Serial.printf("[SENSORS] retrying BME280 on legacy I2C pins (SDA=%d SCL=%d)...\n",
-                  PIN_I2C_FALLBACK_SDA, PIN_I2C_FALLBACK_SCL);
-    BmeInitResult legacy_result = bme_init_on_bus(PIN_I2C_FALLBACK_SDA, PIN_I2C_FALLBACK_SCL);
-    if (legacy_result == BME_INIT_OK) {
-      sensor_bme_ok = true;
-      sensor_bme_status = "OK_LEGACY_PINS";
-      Serial.println("[SENSORS WARN] BME280 answers on the LEGACY GPIO 6/7 pins. "
-                     "Move SDA/SCL to the STEMMA QT port (GPIO 16/17).");
-    } else {
-      // Nothing anywhere: go back to the standard bus so the diagnostics and the
-      // reported pin numbers stay meaningful.
-      i2c_bus_begin(PIN_SDA, PIN_SCL);
-      i2c_devices = i2c_scan_smart();
-      sensor_bme_status = bme_init_status(legacy_result);
-    }
-  }
-#endif
-
-  current_ds_pin = autodetect_ds18b20();
+  current_ds_pin = PIN_DS18B20;
   pinMode(current_ds_pin, INPUT_PULLUP);
+  gpio_pullup_en((gpio_num_t)current_ds_pin);
   oneWire.begin(current_ds_pin);
   ds18b20.setOneWire(&oneWire);
   ds18b20.begin();
+  ds18b20_hw_init(current_ds_pin);
+  Serial.printf("[SENSORS] DS18B20 initialized on GPIO %d (idle level=%d)\n",
+                current_ds_pin, digitalRead(current_ds_pin));
 
-  // MH-Z19B on the hardware UART (board pins RX=8 / TX=18).
-  // VIN must be 5V - on 3.3V the sensor never answers.
+  // MH-Z19B on the hardware UART
   Serial1.begin(MHZ19_BAUD, SERIAL_8N1, PIN_MHZ19_RX, PIN_MHZ19_TX);
   delay(50);
-  Serial.printf("[SENSORS] MH-Z19B UART ready (RX=%d, TX=%d, %d baud). "
-                "VIN must be 5V!\n", PIN_MHZ19_RX, PIN_MHZ19_TX, MHZ19_BAUD);
+  Serial.printf("[SENSORS] MH-Z19B UART ready (RX=%d, TX=%d, %d baud). VIN must be 5V!\n",
+                PIN_MHZ19_RX, PIN_MHZ19_TX, MHZ19_BAUD);
 
-  Serial.printf("[SENSORS] I2C bus SDA=%d SCL=%d, devices: %s\n",
+  Serial.printf("[SENSORS] I2C bus active on SDA=%d SCL=%d, devices: %s\n",
                 i2c_sda_active, i2c_scl_active, i2c_devices.c_str());
 }
 
@@ -281,18 +364,40 @@ static const char *mhz19_error_text(int code) {
   }
 }
 
-// One 9-byte exchange. Returns ppm (> 0) or a negative MHZ19_ERR_* code.
+static int mhz19_internal_temp = -999;
+
+// One 9-byte exchange with strict 0xFF 0x86 frame synchronization.
 static int mhz19_read_once() {
-  uint8_t cmd[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  cmd[8] = mhz19_checksum(cmd);
-  mhz19_send(cmd);
+  while (Serial1.available() > 0) {
+    Serial1.read();  // clear rx fifo
+  }
+
+  uint8_t cmd[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
+  Serial1.write(cmd, 9);
+  Serial1.flush();
 
   uint8_t response[9];
+  memset(response, 0, sizeof(response));
+
   int got = 0;
   unsigned long start = millis();
-  while (got < 9 && (millis() - start) < MHZ19_RESPONSE_TIMEOUT_MS) {
+  while ((millis() - start) < MHZ19_RESPONSE_TIMEOUT_MS) {
     if (Serial1.available() > 0) {
-      response[got++] = (uint8_t)Serial1.read();
+      uint8_t b = (uint8_t)Serial1.read();
+      if (got == 0) {
+        if (b == 0xFF) response[got++] = b;
+      } else if (got == 1) {
+        if (b == 0x86) {
+          response[got++] = b;
+        } else if (b == 0xFF) {
+          response[0] = 0xFF;
+        } else {
+          got = 0;
+        }
+      } else {
+        response[got++] = b;
+        if (got >= 9) break;
+      }
     } else {
       delay(2);
     }
@@ -302,7 +407,9 @@ static int mhz19_read_once() {
   if (response[0] != 0xFF || response[1] != 0x86) return MHZ19_ERR_BAD_FRAME;
   if (mhz19_checksum(response) != response[8]) return MHZ19_ERR_BAD_CRC;
 
-  return (response[2] * 256) + response[3];
+  int ppm = (response[2] << 8) | response[3];
+  mhz19_internal_temp = (int)response[4] - 40;
+  return ppm;
 }
 
 static int mhz19_read_ppm() {
@@ -340,7 +447,7 @@ void read_sensors() {
 
   // 1. BME280 (air temperature / humidity / pressure)
   if (!sensor_bme_ok) {
-    BmeInitResult result = bme_init_on_bus(i2c_sda_active, i2c_scl_active);
+    BmeInitResult result = autodetect_bme280();
     if (result == BME_INIT_OK) {
       sensor_bme_ok = true;
       sensor_bme_status = "OK";
@@ -409,36 +516,40 @@ void read_sensors() {
 
   // 2. DS18B20 (substrate temperature)
   pinMode(current_ds_pin, INPUT_PULLUP);
+  gpio_pullup_en((gpio_num_t)current_ds_pin);
   int idle_lvl = digitalRead(current_ds_pin);
-  int ow_presence = oneWire.reset();
 
+  float t_sub = -999.0f;
+
+  // Attempt 1: Standard OneWire / DallasTemperature
+  int ow_presence = oneWire.reset();
   if (ow_presence == 1) {
     ds18b20.requestTemperatures();
     float t = ds18b20.getTempCByIndex(0);
-    if (t > -100.0 && t < 125.0) {
-      current_substrate_temp = t;
-      sensor_ds_ok = true;
-      sensor_ds_status = "OK";
-      diag += "DS:OK(pin" + String(current_ds_pin) + "=" + String(t, 1) + "C); ";
-    } else {
-      current_substrate_temp = -999.0;
-      sensor_ds_ok = false;
-      sensor_ds_status = "BAD_VALUE";
-      diag += "DS:ErrVal(" + String(t, 1) + "); ";
+    if (t > -55.0f && t < 125.0f) {
+      t_sub = t;
     }
+  }
+
+  // Attempt 2: Direct Hardware Open-Drain driver
+  if (t_sub <= -55.0f || t_sub >= 125.0f) {
+    ds18b20_hw_init(current_ds_pin);
+    float t_hw = ds18b20_read_temp_c(current_ds_pin);
+    if (t_hw > -55.0f && t_hw < 125.0f) {
+      t_sub = t_hw;
+    }
+  }
+
+  if (t_sub > -55.0f && t_sub < 125.0f) {
+    current_substrate_temp = t_sub;
+    sensor_ds_ok = true;
+    sensor_ds_status = "OK";
+    diag += "DS:OK(pin" + String(current_ds_pin) + "=" + String(t_sub, 1) + "C); ";
   } else {
-    current_substrate_temp = -999.0;
+    current_substrate_temp = -999.0f;
     sensor_ds_ok = false;
     sensor_ds_status = "NO_PULSE";
     diag += "DS:NoPulse(pin" + String(current_ds_pin) + ",lvl=" + String(idle_lvl) + "); ";
-    // Try autodetect on the next candidate pin
-    int new_pin = autodetect_ds18b20();
-    if (new_pin != current_ds_pin) {
-      current_ds_pin = new_pin;
-      oneWire.begin(current_ds_pin);
-      ds18b20.setOneWire(&oneWire);
-      ds18b20.begin();
-    }
   }
 
   // 3. MH-Z19B (CO2)
@@ -454,34 +565,24 @@ void read_sensors() {
     current_co2_ppm = co2;
     sensor_co2_ok = true;
 
-    if (co2 >= CO2_SUSPICIOUS_PPM && co2_same_streak >= (CO2_STALE_CYCLES - 1)) {
-      // 5000 ppm is the value MH-Z19B reports while preheating or when its IR lamp
-      // cannot reach the measurement range - usually an underpowered (3.3 V) or
-      // worn-out sensor. Keep showing it, but say out loud that it never moves.
-      sensor_co2_status = "STUCK_5000_PREHEAT_OR_FAULT";
-      Serial.printf("[SENSORS WARN] MH-Z19B reports %d ppm unchanged for %d cycles: "
-                    "preheat/fault value. Check VIN = 5V and wait 3 minutes after power-up.\n",
-                    co2, co2_same_streak + 1);
-      diag += "CO2:" + String(co2) + "ppm(frozen preheat/fault value - check 5V VIN, "
-              "let it warm up 3 min, replace sensor if it never drops)";
-    } else if (co2_same_streak >= (CO2_STALE_CYCLES - 1)) {
-      sensor_co2_status = "STALE_NO_NEW_DATA";
-      Serial.printf("[SENSORS WARN] MH-Z19B reports %d ppm unchanged for %d cycles.\n",
-                    co2, co2_same_streak + 1);
-      diag += "CO2:" + String(co2) + "ppm(frozen for " + String(co2_same_streak + 1) + " cycles)";
+    unsigned long up_sec = millis() / 1000;
+    if (up_sec < 180 && co2 == 400) {
+      sensor_co2_status = "PREHEATING";
+      diag += "CO2:" + String(co2) + "ppm(warmup " + String(up_sec) + "s/180s";
+      if (mhz19_internal_temp > -100) diag += ",t=" + String(mhz19_internal_temp) + "C";
+      diag += ")";
     } else {
       sensor_co2_status = "OK";
       diag += "CO2:" + String(co2) + "ppm";
+      if (mhz19_internal_temp > -100) diag += "(t=" + String(mhz19_internal_temp) + "C)";
     }
   } else {
     current_co2_ppm = -999;
     sensor_co2_ok = false;
     sensor_co2_status = mhz19_error_text(co2);
-    // No reply almost always means: VIN is not on 5V, TX/RX are not crossed, or
-    // the sensor is still preheating.
     diag += "CO2:" + sensor_co2_status;
     if (co2 == MHZ19_ERR_NO_REPLY) {
-      diag += "(check 5V VIN, sensor TX->GPIO8, sensor RX->GPIO18)";
+      diag += "(check 5V, RX->GPIO39, TX->GPIO40)";
     }
   }
 

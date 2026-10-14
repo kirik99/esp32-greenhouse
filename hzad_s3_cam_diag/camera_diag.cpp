@@ -162,6 +162,54 @@ bool capture_single_photo(uint32_t shot_number) {
   return valid_jpeg;
 }
 
+bool capture_and_dump_base64() {
+  if (!camera_initialized) {
+    Serial.println("[CAMERA ERR] Cannot capture: Camera is not initialized.");
+    return false;
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("[CAMERA ERR] esp_camera_fb_get() returned NULL!");
+    return false;
+  }
+
+  Serial.printf("[CAMERA] Frame captured: %u bytes (%ux%u). Streaming Base64...\n", 
+                (unsigned int)fb->len, (unsigned int)fb->width, (unsigned int)fb->height);
+  Serial.println("-----BEGIN JPEG BASE64-----");
+
+  static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  size_t i = 0;
+  char line[65];
+  size_t line_idx = 0;
+
+  while (i < fb->len) {
+    uint32_t octet_a = i < fb->len ? (unsigned char)fb->buf[i++] : 0;
+    uint32_t octet_b = i < fb->len ? (unsigned char)fb->buf[i++] : 0;
+    uint32_t octet_c = i < fb->len ? (unsigned char)fb->buf[i++] : 0;
+    uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
+
+    line[line_idx++] = b64_chars[(triple >> 18) & 0x3F];
+    line[line_idx++] = b64_chars[(triple >> 12) & 0x3F];
+    line[line_idx++] = (i > fb->len + 1) ? '=' : b64_chars[(triple >> 6) & 0x3F];
+    line[line_idx++] = (i > fb->len) ? '=' : b64_chars[triple & 0x3F];
+
+    if (line_idx >= 64) {
+      line[line_idx] = '\0';
+      Serial.println(line);
+      line_idx = 0;
+    }
+  }
+  if (line_idx > 0) {
+    line[line_idx] = '\0';
+    Serial.println(line);
+  }
+
+  Serial.println("-----END JPEG BASE64-----");
+  esp_camera_fb_return(fb);
+  return true;
+}
+
 bool is_camera_ready() {
   return camera_initialized;
 }

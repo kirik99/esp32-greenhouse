@@ -101,11 +101,18 @@ void setup() {
   // Print summary of both subsystems
   print_stage_summary();
 
+  // Stream one initial frame in Base64 so the user can immediately view it
+  if (is_camera_ready()) {
+    Serial.println("[VIEW] Streaming test snapshot #0 for image viewer...");
+    capture_and_dump_base64();
+  }
+
   Serial.println("\n[STAGE D] ===============================================");
   Serial.println("[STAGE D] Starting Concurrent Operation Test");
   Serial.println("[STAGE D] BME280 will be sampled every 5 seconds.");
   Serial.printf("[STAGE D] Camera will capture %d sequential test frames.\n", SEQUENTIAL_SNAP_TARGET);
-  Serial.println("[STAGE D] Type 'snap' in Serial Monitor to capture on demand.");
+  Serial.println("[STAGE D] Type 'photo' in Serial Monitor to capture and stream Base64 JPEG.");
+  Serial.println("[STAGE D] Type 'snap' to capture without Base64 dump.");
   Serial.println("[STAGE D] Type 'bme' to read sensor on demand.");
   Serial.println("[STAGE D] Type 'scan' to re-run I2C scanner.");
   Serial.println("[STAGE D] Type 'info' to reprint platform telemetry.");
@@ -145,7 +152,11 @@ void loop() {
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
-    if (cmd.equalsIgnoreCase("snap")) {
+    if (cmd.equalsIgnoreCase("photo")) {
+      consecutive_capture_count++;
+      Serial.printf("[MANUAL] Triggering Base64 photo snapshot #%u...\n", consecutive_capture_count);
+      capture_and_dump_base64();
+    } else if (cmd.equalsIgnoreCase("snap")) {
       consecutive_capture_count++;
       Serial.printf("[MANUAL] Triggering manual snapshot #%u...\n", consecutive_capture_count);
       capture_single_photo(consecutive_capture_count);
@@ -157,7 +168,7 @@ void loop() {
     } else if (cmd.equalsIgnoreCase("info")) {
       print_platform_info();
     } else if (cmd.length() > 0) {
-      Serial.printf("[CONSOLE] Unknown command: '%s'. Available: 'snap', 'bme', 'scan', 'info'\n", cmd.c_str());
+      Serial.printf("[CONSOLE] Unknown command: '%s'. Available: 'photo', 'snap', 'bme', 'scan', 'info'\n", cmd.c_str());
     }
   }
 }

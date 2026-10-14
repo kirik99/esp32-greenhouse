@@ -5,6 +5,7 @@
 
 bool init_camera();
 bool capture_single_photo(uint32_t shot_number);
+bool capture_and_dump_base64();
 bool is_camera_ready();
 const char* get_detected_camera_model();
 

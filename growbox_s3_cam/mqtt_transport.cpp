@@ -241,12 +241,12 @@ void setup_mqtt() {
   mqtt_cfg.session.disable_clean_session = false;
 
   mqtt_cfg.network.reconnect_timeout_ms = 5000;
-  mqtt_cfg.network.timeout_ms = 15000;
+  mqtt_cfg.network.timeout_ms = 30000;
 
   // Optimized buffers for handling large frames and camera messages
-  mqtt_cfg.buffer.size = 4096;
-  mqtt_cfg.buffer.out_size = 8192;
-  mqtt_cfg.outbox.limit = 128 * 1024;
+  mqtt_cfg.buffer.size = 8192;
+  mqtt_cfg.buffer.out_size = 16384;
+  mqtt_cfg.outbox.limit = 512 * 1024;
 
   // Background FreeRTOS task configuration
   mqtt_cfg.task.stack_size = 8192;
@@ -372,13 +372,18 @@ void mqtt_publish_image(const char* json_payload) {
   }
 
   size_t len = strlen(json_payload);
-  Serial.printf("[CAMERA] Publishing image to growbox/image/raw (%u bytes)...\n", (unsigned int)len);
+  Serial.printf("[CAMERA] Queuing image to growbox/image/raw (%u bytes)...\n", (unsigned int)len);
 
-  int msg_id = esp_mqtt_client_publish(mqtt_client, "growbox/image/raw", json_payload, len, 0, 0);
+  int msg_id = esp_mqtt_client_enqueue(mqtt_client, "growbox/image/raw", json_payload, len, 0, 0, true);
   if (msg_id >= 0) {
-    Serial.println("[CAMERA OK] Image successfully published to broker!");
+    Serial.println("[CAMERA OK] Image queued in MQTT outbox!");
   } else {
-    Serial.printf("[CAMERA ERR] Image publication failed (%u bytes), esp-mqtt error code: %d\n",
-                  (unsigned int)len, msg_id);
+    msg_id = esp_mqtt_client_publish(mqtt_client, "growbox/image/raw", json_payload, len, 0, 0);
+    if (msg_id >= 0) {
+      Serial.println("[CAMERA OK] Image published directly!");
+    } else {
+      Serial.printf("[CAMERA ERR] Image publication failed (%u bytes), code: %d\n",
+                    (unsigned int)len, msg_id);
+    }
   }
 }

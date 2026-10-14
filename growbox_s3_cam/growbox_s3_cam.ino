@@ -98,7 +98,7 @@ void loop() {
     mqtt_loop();
   }
   
-  if (now - last_sensor_time > SENSOR_INTERVAL) {
+  if (now - last_sensor_time > SENSOR_INTERVAL || last_sensor_time == 0) {
     read_sensors();
     if (WiFi.status() == WL_CONNECTED) {
       mqtt_publish_sensors();
@@ -106,7 +106,7 @@ void loop() {
     last_sensor_time = now;
   }
   
-  if (now - last_status_time > STATUS_INTERVAL) {
+  if (now - last_status_time > STATUS_INTERVAL || last_status_time == 0) {
     if (WiFi.status() == WL_CONNECTED) {
       mqtt_publish_status();
     }
