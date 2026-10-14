@@ -185,7 +185,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
   }
 }
 
+#include <lwip/dns.h>
+
 void setup_mqtt() {
+  ip_addr_t dns1, dns2;
+  ipaddr_aton("8.8.8.8", &dns1);
+  ipaddr_aton("1.1.1.1", &dns2);
+  dns_setserver(0, &dns1);
+  dns_setserver(1, &dns2);
+
   init_client_id();
 
   #if USE_MQTT_TLS && !MQTT_ALLOW_INSECURE_TLS
