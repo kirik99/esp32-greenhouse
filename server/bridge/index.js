@@ -8,6 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const jpeg = require('jpeg-js');
 const { ClimateController } = require('./automation');
+const { installImageUpload } = require('./image-upload');
 
 // Configuration
 const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
@@ -234,6 +235,17 @@ setInterval(() => {
 
 // Express App setup
 const app = express();
+installImageUpload(app, {
+  imagesDir: IMAGES_DIR,
+  token: process.env.IMAGE_UPLOAD_TOKEN,
+  getSensors: () => ({ ...climate.lastSensors }),
+  onSaved: ({ filename, width, height, size }) => {
+    writeApi.writePoint(new Point('camera_capture').stringField('filename', filename)
+      .intField('size_bytes', size).intField('width', width).intField('height', height));
+    mqttClient.publish('growbox/camera/updated', JSON.stringify({ filename }), { qos: 1 });
+    console.log(`[UPLOAD] JPEG saved: ${filename} (${size} bytes, ${width}x${height})`);
+  }
+});
 app.use(cors()); // Разрешаем CORS для локальной разработки
 
 // Raw binary parser for direct camera image upload (ESP32 HTTP POST)

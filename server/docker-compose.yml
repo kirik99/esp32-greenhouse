@@ -64,6 +64,7 @@ services:
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-sensors}
       - BRIDGE_PORT=3001
       - IMAGES_DIR=/app/images
+      - IMAGE_UPLOAD_TOKEN=${IMAGE_UPLOAD_TOKEN:-}
       - ADMIN_PIN=${ADMIN_PIN:-2212}
       - TZ=${TZ:-Europe/Moscow}
     volumes:
