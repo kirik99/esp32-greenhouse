@@ -86,16 +86,57 @@ function yuy2ToRgba(yuy2Buffer, width, height) {
   return rgba;
 }
 
+function saveImageBuffer(imgBuffer, width = 1280, height = 720) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = pad(now.getMonth() + 1);
+  const d = pad(now.getDate());
+  const hh = pad(now.getHours());
+  const mm = pad(now.getMinutes());
+  const ss = pad(now.getSeconds());
+  const filename = `${y}-${m}-${d}_${hh}-${mm}-${ss}.jpg`;
+  const filepath = path.join(IMAGES_DIR, filename);
+
+  if (imgBuffer.length > 4 && imgBuffer[0] === 0xFF && imgBuffer[1] === 0xD8) {
+    // Native JPEG from hardware camera (OV2640 / esp_camera)
+    fs.writeFileSync(filepath, imgBuffer);
+    console.log(`[${new Date().toISOString()}] Native JPEG saved to ${filepath} (${imgBuffer.length} bytes, ${width}x${height})`);
+  } else {
+    // Legacy YUY2 raw buffer conversion
+    if (imgBuffer.length !== width * height * 2) {
+      console.error(`[${new Date().toISOString()}] Invalid image buffer: expected JPEG (0xFF 0xD8) or YUY2 length ${width * height * 2}, got ${imgBuffer.length}`);
+      return { success: false, error: 'Invalid buffer format/length' };
+    }
+    
+    const rgbaBuffer = yuy2ToRgba(imgBuffer, width, height);
+    const jpegData = jpeg.encode({
+      data: rgbaBuffer,
+      width: width,
+      height: height
+    }, 85);
+    
+    fs.writeFileSync(filepath, jpegData.data);
+    console.log(`[${new Date().toISOString()}] YUY2 converted to JPEG and saved to ${filepath}`);
+  }
+
+  const photoPoint = new Point('camera_capture')
+    .stringField('filename', filename)
+    .intField('size_bytes', imgBuffer.length)
+    .intField('width', width)
+    .intField('height', height);
+  writeApi.writePoint(photoPoint);
+  console.log(`[${new Date().toISOString()}] Camera capture recorded in InfluxDB: ${filename}`);
+
+  return { success: true, filename, filepath, size: imgBuffer.length };
+}
+
 mqttClient.on('message', async (topic, message) => {
   try {
     if (topic === 'growbox/sensors') {
       const data = JSON.parse(message.toString());
       const point = new Point('sensor_data');
 
-      // The firmware reports "no data" as -999 (and may also send null/NaN).
-      // Writing that sentinel as a real measurement poisons the time series, so
-      // only valid channels are stored; offline ones are simply left out and
-      // counted in sensors_online.
       const valid = (v) => typeof v === 'number' && Number.isFinite(v) && v !== -999;
       const channels = [
         ['air_temp', 'air_temp_ok', 'float'],
@@ -142,7 +183,6 @@ mqttClient.on('message', async (topic, message) => {
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
       const point = new Point('relay_status');
-      // data.relays = [false, false, false, false, false, false]
       if (Array.isArray(data.relays)) {
         const names = ['humidifier','heater','heater_fan','fan1','fan2','backlight'];
         data.relays.forEach((state, i) => {
@@ -160,11 +200,11 @@ mqttClient.on('message', async (topic, message) => {
       climate.updateHardwareStatus(data);
     }
     else if (topic === 'growbox/image/raw') {
-      console.log(`[${new Date().toISOString()}] Received raw image data, size: ${message.length} bytes`);
+      console.log(`[${new Date().toISOString()}] Received raw image data via MQTT, size: ${message.length} bytes`);
       
       let base64Str = message.toString();
-      let width = 160;
-      let height = 120;
+      let width = 1280;
+      let height = 720;
 
       if (base64Str.startsWith('{')) {
         try {
@@ -178,47 +218,7 @@ mqttClient.on('message', async (topic, message) => {
       }
 
       const imgBuffer = Buffer.from(base64Str, 'base64');
-      
-      const pad = (n) => String(n).padStart(2, '0');
-      const now = new Date();
-      const y = now.getFullYear();
-      const m = pad(now.getMonth() + 1);
-      const d = pad(now.getDate());
-      const hh = pad(now.getHours());
-      const mm = pad(now.getMinutes());
-      const ss = pad(now.getSeconds());
-      const filename = `${y}-${m}-${d}_${hh}-${mm}-${ss}.jpg`;
-      const filepath = path.join(IMAGES_DIR, filename);
-
-      if (imgBuffer.length > 4 && imgBuffer[0] === 0xFF && imgBuffer[1] === 0xD8) {
-        // Native JPEG from hardware camera (OV2640 / esp_camera)
-        fs.writeFileSync(filepath, imgBuffer);
-        console.log(`[${new Date().toISOString()}] Native JPEG saved to ${filepath} (${imgBuffer.length} bytes, ${width}x${height})`);
-      } else {
-        // Legacy YUY2 raw buffer conversion
-        if (imgBuffer.length !== width * height * 2) {
-          console.error(`[${new Date().toISOString()}] Invalid YUY2 buffer length: expected ${width * height * 2}, got ${imgBuffer.length}`);
-          return;
-        }
-        
-        const rgbaBuffer = yuy2ToRgba(imgBuffer, width, height);
-        const jpegData = jpeg.encode({
-          data: rgbaBuffer,
-          width: width,
-          height: height
-        }, 85);
-        
-        fs.writeFileSync(filepath, jpegData.data);
-        console.log(`[${new Date().toISOString()}] YUY2 converted to JPEG and saved to ${filepath}`);
-      }
-
-      const photoPoint = new Point('camera_capture')
-        .stringField('filename', filename)
-        .intField('size_bytes', imgBuffer.length)
-        .intField('width', width)
-        .intField('height', height);
-      writeApi.writePoint(photoPoint);
-      console.log(`[${new Date().toISOString()}] Camera capture recorded in InfluxDB: ${filename}`);
+      saveImageBuffer(imgBuffer, width, height);
     }
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error processing MQTT message on topic ${topic}:`, err.message);
@@ -235,7 +235,10 @@ setInterval(() => {
 // Express App setup
 const app = express();
 app.use(cors()); // Разрешаем CORS для локальной разработки
-app.use(express.json());
+
+// Raw binary parser for direct camera image upload (ESP32 HTTP POST)
+app.use('/api/upload-image', express.raw({ type: ['image/jpeg', 'image/*', 'application/octet-stream'], limit: '10mb' }));
+app.use(express.json({ limit: '10mb' }));
 
 // PIN Authentication, Brute-force Protection & Session Management
 const ADMIN_PIN = process.env.ADMIN_PIN || '2212';
@@ -412,6 +415,39 @@ app.post('/api/climate/setpoints', requireAuth, (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', climate_mode: climate.mode });
+});
+
+// Прямой HTTP POST для загрузки фото с ESP32 (без WebSocket и Base64 оверхеда)
+app.post('/api/upload-image', (req, res) => {
+  try {
+    let imgBuffer = null;
+    let width = 1280;
+    let height = 720;
+
+    if (Buffer.isBuffer(req.body)) {
+      imgBuffer = req.body;
+    } else if (req.body && typeof req.body === 'object' && req.body.data) {
+      imgBuffer = Buffer.from(req.body.data, 'base64');
+      if (req.body.width) width = req.body.width;
+      if (req.body.height) height = req.body.height;
+    }
+
+    if (!imgBuffer || imgBuffer.length < 100) {
+      console.warn(`[${new Date().toISOString()}] Rejected /api/upload-image: empty or invalid payload`);
+      return res.status(400).json({ success: false, error: 'Empty or invalid image payload' });
+    }
+
+    const result = saveImageBuffer(imgBuffer, width, height);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    console.log(`[${new Date().toISOString()}] Successfully accepted image upload via HTTP POST (${imgBuffer.length} bytes -> ${result.filename})`);
+    res.json({ success: true, filename: result.filename, size: imgBuffer.length });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error in /api/upload-image:`, err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Ручка для принудительного снимка с камеры (требует авторизации)

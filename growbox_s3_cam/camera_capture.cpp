@@ -1,38 +1,72 @@
 #include "camera_capture.h"
 #include "mqtt_transport.h"
 #include "config.h"
+#include "wifi_config.h"
 #include "esp_camera.h"
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 static bool camera_ready = false;
 static unsigned long last_photo_time = 0;
 static bool initial_photo_sent = false;
 static volatile bool force_capture = false;
 
-static void fast_base64_encode(const uint8_t *in, size_t in_len, char *out) {
-  static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  size_t i = 0, j = 0;
-  for (; i + 2 < in_len; i += 3) {
-    uint32_t n = (in[i] << 16) | (in[i+1] << 8) | in[i+2];
-    out[j++] = b64[(n >> 18) & 0x3F];
-    out[j++] = b64[(n >> 12) & 0x3F];
-    out[j++] = b64[(n >> 6) & 0x3F];
-    out[j++] = b64[n & 0x3F];
+static bool upload_photo_http(const uint8_t *buf, size_t len) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[CAMERA ERR] Wi-Fi not connected, skipping upload");
+    return false;
   }
-  if (i < in_len) {
-    uint32_t n = in[i] << 16;
-    out[j++] = b64[(n >> 18) & 0x3F];
-    if (i + 1 < in_len) {
-      n |= in[i+1] << 8;
-      out[j++] = b64[(n >> 12) & 0x3F];
-      out[j++] = b64[(n >> 6) & 0x3F];
-      out[j++] = '=';
-    } else {
-      out[j++] = b64[(n >> 12) & 0x3F];
-      out[j++] = '=';
-      out[j++] = '=';
+
+  String upload_url = API_UPLOAD_URL;
+  bool is_https = upload_url.startsWith("https://");
+
+  HTTPClient http;
+  int httpCode = -1;
+  unsigned long start_ms = millis();
+
+  Serial.printf("[CAMERA] Uploading %u bytes JPEG directly to %s...\n", (unsigned int)len, upload_url.c_str());
+
+  if (is_https) {
+    WiFiClientSecure client;
+    client.setInsecure(); // Direct TLS connection without CA bundle validation
+    client.setTimeout(12);
+    http.setTimeout(15000);
+    if (!http.begin(client, upload_url)) {
+      Serial.println("[CAMERA ERR] HTTPS initialization failed");
+      return false;
     }
+    http.addHeader("Content-Type", "image/jpeg");
+    #ifdef API_KEY
+    http.addHeader("X-API-Key", API_KEY);
+    #endif
+    httpCode = http.POST((uint8_t*)buf, len);
+    http.end();
+  } else {
+    WiFiClient client;
+    client.setTimeout(12);
+    http.setTimeout(15000);
+    if (!http.begin(client, upload_url)) {
+      Serial.println("[CAMERA ERR] HTTP initialization failed");
+      return false;
+    }
+    http.addHeader("Content-Type", "image/jpeg");
+    #ifdef API_KEY
+    http.addHeader("X-API-Key", API_KEY);
+    #endif
+    httpCode = http.POST((uint8_t*)buf, len);
+    http.end();
   }
-  out[j] = '\0';
+
+  unsigned long duration = millis() - start_ms;
+  if (httpCode == HTTP_CODE_OK || httpCode == 201) {
+    Serial.printf("[CAMERA OK] Photo uploaded successfully in %lu ms! HTTP code: %d\n", duration, httpCode);
+    return true;
+  } else {
+    Serial.printf("[CAMERA ERR] HTTP POST failed, code: %d (%s) [%lu ms]\n", 
+                  httpCode, http.errorToString(httpCode).c_str(), duration);
+    return false;
+  }
 }
 
 void trigger_camera_capture() {
@@ -158,40 +192,10 @@ void process_camera() {
     initial_photo_sent = true;
     last_photo_time = now;
 
-    Serial.printf("[CAMERA] Captured JPEG: %u bytes (%ux%u). Encoding Base64...\n",
+    Serial.printf("[CAMERA] Captured JPEG: %u bytes (%ux%u). Uploading directly via HTTP POST...\n",
                   (unsigned int)fb->len, (unsigned int)fb->width, (unsigned int)fb->height);
 
-    size_t b64_len = ((fb->len + 2) / 3) * 4;
-    char header_buf[64];
-    int header_len = snprintf(header_buf, sizeof(header_buf), 
-                              "{\"format\":\"jpeg\",\"width\":%u,\"height\":%u,\"data\":\"",
-                              (unsigned int)fb->width, (unsigned int)fb->height);
-
-    size_t total_payload_len = header_len + b64_len + 4; // header + b64 + "\"}" + \0
-
-    char *json_buf = (char *)heap_caps_malloc(total_payload_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!json_buf) {
-      json_buf = (char *)malloc(total_payload_len);
-    }
-
-    if (!json_buf) {
-      Serial.println("[CAMERA ERR] Failed to allocate memory for image payload!");
-      esp_camera_fb_return(fb);
-      return;
-    }
-
-    memcpy(json_buf, header_buf, header_len);
-    fast_base64_encode(fb->buf, fb->len, json_buf + header_len);
+    upload_photo_http(fb->buf, fb->len);
     esp_camera_fb_return(fb);
-
-    size_t current_len = header_len + b64_len;
-    json_buf[current_len++] = '"';
-    json_buf[current_len++] = '}';
-    json_buf[current_len] = '\0';
-
-    Serial.printf("[CAMERA] Publishing image to MQTT (%u bytes in PSRAM)...\n", (unsigned int)current_len);
-    mqtt_publish_image(json_buf);
-
-    free(json_buf);
   }
 }
