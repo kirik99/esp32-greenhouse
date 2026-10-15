@@ -2,6 +2,7 @@ node_modules
 images
 state
 climate_state.json
+camera_settings.json
 .env
 .env.*
 source.tar.gz

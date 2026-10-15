@@ -283,7 +283,7 @@
       <section class="lg:col-span-5">
         <div class="flex items-center justify-between mb-3">
           <h2 class="text-xs font-semibold tracking-wider text-zinc-400 uppercase">Визуальный мониторинг</h2>
-          <span class="text-[11px] font-mono text-zinc-400">UVC Host</span>
+          <span class="text-[11px] font-mono text-zinc-400">OV2640 · HTTPS</span>
         </div>
 
         <div class="panel p-4 flex flex-col">
@@ -300,10 +300,10 @@
 
             <!-- Resolution & Timestamp Badges -->
             <div class="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur border border-white/10 text-[10px] font-mono text-zinc-400">
-              160×120 YUY2
+              JPEG
             </div>
             <div id="camMeta" class="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur border border-white/10 text-[10px] font-mono text-zinc-400">
-              Авто: каждые 10 мин
+              Ожидание снимка
             </div>
           </div>
 
@@ -322,6 +322,28 @@
               </svg>
             </button>
           </div>
+
+          <section class="mt-4 pt-4 border-t border-white/[0.06]" aria-labelledby="cameraSettingsTitle">
+            <h3 id="cameraSettingsTitle" class="text-xs font-semibold text-zinc-200 mb-3">Расписание камеры</h3>
+            <form id="cameraSettingsForm" onsubmit="event.preventDefault(); saveCameraSettings()" class="space-y-3">
+              <label class="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                <span>Принимать фото на сервере</span>
+                <input id="cameraReception" type="checkbox" disabled class="w-4 h-4 accent-emerald-500">
+              </label>
+              <label class="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                <span>Автосъёмка на ESP</span>
+                <input id="cameraAuto" type="checkbox" disabled class="w-4 h-4 accent-emerald-500">
+              </label>
+              <label for="cameraInterval" class="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                <span>Интервал, минуты</span>
+                <input id="cameraInterval" type="number" inputmode="numeric" min="1" max="1440" step="1" value="10" disabled
+                  class="w-24 px-2 py-1.5 bg-zinc-950 border border-white/10 rounded-lg text-right font-mono text-zinc-100 disabled:opacity-40">
+              </label>
+              <button id="cameraSettingsSave" type="submit" class="w-full py-2 rounded-lg border border-white/10 bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-100 disabled:opacity-40">Войти по PIN для изменения</button>
+            </form>
+            <p id="cameraSettingsStatus" role="status" aria-live="polite" class="mt-2 text-[11px] leading-relaxed text-zinc-400">Загрузка настроек…</p>
+            <p class="mt-2 text-[10px] leading-relaxed text-zinc-500">При выключенной автосъёмке снимки делаются только по запросу. Пересылка в Telegram настраивается отдельно. Для старой прошивки потребуется одно обновление.</p>
+          </section>
 
           <!-- Gallery Strip & Counter -->
           <div class="mt-4 pt-3 border-t border-white/[0.06]">
@@ -692,6 +714,7 @@
           sessionStorage.setItem('growbox_session_token', sessionToken);
           unlockExpiresAt = Date.now() + 15 * 60 * 1000;
           checkLockStatus();
+          const actionAfterLogin = pendingAction;
           closePinModal();
 
           if (data.mqtt) {
@@ -699,12 +722,9 @@
           }
           loadLatestImage();
           fetchInitialClimate();
+          loadCameraSettings();
 
-          if (typeof pendingAction === 'function') {
-            const act = pendingAction;
-            pendingAction = null;
-            act();
-          }
+          if (typeof actionAfterLogin === 'function') actionAfterLogin();
         } else {
           err.innerText = data.error || 'Неверный PIN-код';
           err.classList.remove('hidden');
@@ -869,18 +889,108 @@
             'Authorization': 'Bearer ' + sessionToken
           }
         })
-        .then(r => r.json())
+        .then(async r => {
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || 'HTTP '+r.status);
+          setTimeout(loadLatestImage, 3500);
+        })
         .catch((err) => {
-          console.warn('REST capture error:', err);
-        });
-
-        setTimeout(() => {
-          loadLatestImage();
+          document.getElementById('cameraSettingsStatus').textContent = 'Снимок не запрошен: '+err.message;
+        })
+        .finally(() => {
           btn.disabled = false;
           text.innerText = 'Сделать снимок сейчас';
-        }, 3500);
+        });
       });
     }
+
+    let cameraSettingsDirty = false;
+    let cameraSettingsSaving = false;
+    let cameraSettingsRead = 0;
+    let currentCameraSettings = null;
+
+    function renderCameraSettings(data, replaceDraft = false) {
+      currentCameraSettings = data;
+      const reception = document.getElementById('cameraReception');
+      const auto = document.getElementById('cameraAuto');
+      const interval = document.getElementById('cameraInterval');
+      const button = document.getElementById('cameraSettingsSave');
+      if (!cameraSettingsDirty || replaceDraft) {
+        reception.checked = data.settings.reception_enabled;
+        auto.checked = data.settings.auto_enabled;
+        interval.value = data.settings.interval_seconds / 60;
+        cameraSettingsDirty = false;
+      }
+      reception.disabled = !isUnlocked || cameraSettingsSaving;
+      auto.disabled = !isUnlocked || cameraSettingsSaving || !reception.checked;
+      interval.disabled = !isUnlocked || cameraSettingsSaving || !reception.checked;
+      button.disabled = cameraSettingsSaving;
+      button.textContent = cameraSettingsSaving ? 'Сохранение…' : (isUnlocked ? 'Сохранить настройки' : 'Войти по PIN для изменения');
+      const device = data.device;
+      let state = data.settings.reception_enabled ? 'Приём фото разрешён. ' : 'Приём фото выключен. ';
+      if (data.load_error) state += 'Файл настроек повреждён: приём и автосъёмка заблокированы. ';
+      if (!data.mqtt_connected) state += 'Нет связи с MQTT; настройка ожидает доставки на ESP.';
+      else if (!device || !device.fresh) state += 'Ожидается подтверждение ESP. Сохранение на сервере ещё не означает применение на плате.';
+      else if (!device.supported) state += 'Эта прошивка ESP не поддерживает настройку расписания. Нужно одно обновление прошивки.';
+      else if (!device.confirmed) state += 'ESP ещё не подтвердил сохранение выбранных настроек.';
+      else state += device.camera_ready ? 'ESP подтвердил настройку и сохранил её.' : 'Настройка сохранена на ESP, но камера недоступна.';
+      document.getElementById('cameraSettingsStatus').textContent = state;
+    }
+
+    async function loadCameraSettings() {
+      if (cameraSettingsSaving) return;
+      const read = ++cameraSettingsRead;
+      const headers = sessionToken ? {'Authorization':'Bearer '+sessionToken} : {};
+      try {
+        const res = await fetch(apiBase+'/api/camera/settings', {headers});
+        if (read !== cameraSettingsRead) return;
+        if (res.status === 401) {
+          for (const id of ['cameraReception','cameraAuto','cameraInterval']) document.getElementById(id).disabled = true;
+          document.getElementById('cameraSettingsStatus').textContent = 'Войдите по PIN, чтобы посмотреть настройки камеры.';
+          return;
+        }
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        const data = await res.json();
+        if (read === cameraSettingsRead) renderCameraSettings(data);
+      } catch (_) {
+        if (read === cameraSettingsRead) document.getElementById('cameraSettingsStatus').textContent = 'Не удалось получить настройки камеры. Проверьте связь с сервером.';
+      }
+    }
+
+    async function saveCameraSettings() {
+      if (!isUnlocked || Date.now() >= unlockExpiresAt) return openPinModal(() => loadCameraSettings());
+      if (cameraSettingsSaving) return;
+      const minutes = Number(document.getElementById('cameraInterval').value);
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+        document.getElementById('cameraSettingsStatus').textContent = 'Укажите целый интервал от 1 до 1440 минут.';
+        return;
+      }
+      const reception = document.getElementById('cameraReception').checked;
+      const value = {reception_enabled: reception, auto_enabled: reception && document.getElementById('cameraAuto').checked, interval_seconds:minutes*60};
+      cameraSettingsSaving = true;
+      ++cameraSettingsRead;
+      if (currentCameraSettings) renderCameraSettings(currentCameraSettings);
+      try {
+        const res = await fetch(apiBase+'/api/camera/settings', {method:'PUT',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer '+sessionToken}, body:JSON.stringify(value)});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP '+res.status);
+        cameraSettingsSaving = false;
+        renderCameraSettings(data, true);
+      } catch (err) {
+        cameraSettingsSaving = false;
+        if (currentCameraSettings) renderCameraSettings(currentCameraSettings);
+        document.getElementById('cameraSettingsStatus').textContent = 'Не сохранено: '+err.message;
+      }
+    }
+
+    document.getElementById('cameraSettingsForm').addEventListener('input', () => {
+      cameraSettingsDirty = true;
+      const reception = document.getElementById('cameraReception').checked;
+      if (!reception) document.getElementById('cameraAuto').checked = false;
+      document.getElementById('cameraAuto').disabled = !isUnlocked || !reception;
+      document.getElementById('cameraInterval').disabled = !isUnlocked || !reception;
+    });
 
     function loadLatestImage() {
       const img = document.getElementById('camImage');
@@ -964,6 +1074,7 @@
             if (data.mqtt) initMqtt(data.mqtt);
             loadLatestImage();
             fetchInitialClimate();
+            loadCameraSettings();
           } else if (data && data.public_telemetry) {
             if (data.mqtt) initMqtt(data.mqtt);
             loadLatestImage();
@@ -987,6 +1098,8 @@
     // Startup session check & periodic refresh
     checkInitialSession();
     setInterval(loadLatestImage, 60000);
+    setInterval(loadCameraSettings, 10000);
+    loadCameraSettings();
     setInterval(fetchInitialClimate, 30000);
   </script>
 

@@ -11,13 +11,15 @@ test('real bridge entrypoint connects HTTPS archive events to Telegram and prese
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'growbox-http-bot-'));
   const stateFile = path.join(dir, 'state.json');
   fs.writeFileSync(stateFile, JSON.stringify({mode: 'manual', profiles: {}}));
+  const cameraFile = path.join(dir, 'camera_settings.json');
+  fs.writeFileSync(cameraFile, JSON.stringify({reception_enabled:true,auto_enabled:false,interval_seconds:600,request_id:'11111111-1111-1111-1111-111111111111'}));
   const tg = new FakeTelegram();
   await tg.start();
   const token = 'offline-image-upload-token-for-tests';
   const child = spawn(process.execPath, [path.join('test', 'helpers', 'bridge-child.js')], {
     cwd: path.join(__dirname, '..'),
     env: {...process.env, MQTT_HOST:'127.0.0.1', MQTT_PORT:'1', INFLUXDB_URL:'http://127.0.0.1:1',
-      BRIDGE_PORT:'0', IMAGES_DIR:path.join(dir,'images'), CLIMATE_STATE_FILE:stateFile,
+      BRIDGE_PORT:'0', IMAGES_DIR:path.join(dir,'images'), CLIMATE_STATE_FILE:stateFile, CAMERA_SETTINGS_FILE:cameraFile,
       IMAGE_UPLOAD_TOKEN:token, TELEGRAM_BOT_TOKEN:'1:TEST-TOKEN', TELEGRAM_CHAT_ID:'777',
       TELEGRAM_API_ROOT:tg.apiRoot, TELEGRAM_AUTO_PHOTO:'on', EMIT_SIGNAL:'none'}
   });

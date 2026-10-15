@@ -30,6 +30,16 @@ const { installImageUpload } = require('../image-upload');
 const CHAT = 777;
 const imagesDirs = [];
 
+test('paused reception refuses /photo without MQTT capture', async () => {
+  const ctx=await startBot({canCapture:()=>false});
+  try {
+    ctx.tg.sendCommand('/photo');
+    await waitFor(()=>ctx.tg.texts().some(t=>/Приём фото отключён/.test(t)));
+    assert.equal(ctx.mqtt.topic('growbox/camera/capture').length,0);
+    assert.equal(ctx.bot.hasPendingCapture(),false);
+  } finally {await stopBot(ctx);}
+});
+
 async function waitFor(check, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
@@ -109,7 +119,7 @@ test('polling retries after a transient startup failure without a bridge restart
 });
 
 /** Boot the real bot module against stubs. */
-async function startBot({ chatIds = String(CHAT), autoPhoto = 'off', failMethods = [], captureTimeoutMs } = {}) {
+async function startBot({ chatIds = String(CHAT), autoPhoto = 'off', failMethods = [], captureTimeoutMs, canCapture } = {}) {
   const tg = new FakeTelegram();
   await tg.start();
   for (const method of failMethods) tg.failMethods.add(method);
@@ -133,6 +143,7 @@ async function startBot({ chatIds = String(CHAT), autoPhoto = 'off', failMethods
     apiRoot: tg.apiRoot,
     autoPhoto,
     captureTimeoutMs,
+    canCapture,
     queryHistory: async () => [{ label: '🌡 Воздух', unit: '°C', digits: 1, count: 5, min: 1, max: 3, avg: 2 }],
     launchOptions: { dropPendingUpdates: true },
     logger: { log: (m) => logs.push(m), warn: (m) => logs.push(m) }

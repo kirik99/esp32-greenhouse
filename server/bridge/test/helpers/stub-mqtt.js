@@ -10,9 +10,13 @@ class StubMqtt {
     this.handlers = {};
   }
 
-  publish(topic, payload) {
+  publish(topic, payload, options, callback) {
     if (!this.connected) throw new Error('MQTT client is not connected');
-    this.publishes.push({ topic, payload: String(payload) });
+    const record = { topic, payload: String(payload) };
+    if (options && typeof options === 'object') record.options = options;
+    this.publishes.push(record);
+    if (typeof options === 'function') options(null);
+    else if (typeof callback === 'function') callback(null);
     return true;
   }
 

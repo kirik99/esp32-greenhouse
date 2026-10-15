@@ -66,6 +66,7 @@ services:
       - IMAGES_DIR=/app/images
       - IMAGE_UPLOAD_TOKEN=${IMAGE_UPLOAD_TOKEN:-}
       - CLIMATE_STATE_FILE=/app/state/climate_state.json
+      - CAMERA_SETTINGS_FILE=/app/state/camera_settings.json
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - TELEGRAM_AUTO_PHOTO=${TELEGRAM_AUTO_PHOTO:-off}

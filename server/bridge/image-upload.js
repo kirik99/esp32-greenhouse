@@ -5,9 +5,10 @@ const express = require('express');
 const jpeg = require('jpeg-js');
 const { buildImageMetadata } = require('./image-metadata');
 
-function installImageUpload(app, { imagesDir, token, getSensors, getState, onSaved, maxBytes = 1024 * 1024 }) {
+function installImageUpload(app, { imagesDir, token, getSensors, getState, onSaved, acceptsPhotos = () => true, maxBytes = 1024 * 1024 }) {
   const raw = express.raw({ type: 'image/jpeg', limit: maxBytes, inflate: false });
   app.post('/api/upload-image', (req, res, next) => {
+    if (!acceptsPhotos()) return res.status(503).json({ error: 'Photo reception disabled' });
     if (!token || token.length < 32) return res.status(503).json({ error: 'Image upload disabled' });
     const supplied = Buffer.from(req.get('X-Upload-Token') || '');
     const expected = Buffer.from(token);
@@ -20,6 +21,8 @@ function installImageUpload(app, { imagesDir, token, getSensors, getState, onSav
     if (err) return res.status(err.status === 413 ? 413 : 400).json({ error: err.status === 413 ? 'Image exceeds size limit' : 'Invalid upload body' });
     next();
   }), (req, res) => {
+    // Policy may have changed while the upload body was being received.
+    if (!acceptsPhotos()) return res.status(503).json({ error: 'Photo reception disabled' });
     const body = req.body;
     if (!Buffer.isBuffer(body) || body.length < 4 || body[0] !== 0xff || body[1] !== 0xd8 ||
         body[body.length - 2] !== 0xff || body[body.length - 1] !== 0xd9) {

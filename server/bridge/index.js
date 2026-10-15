@@ -14,6 +14,7 @@ let createTelegramBot = null;
 try { ({ createTelegramBot } = require('./telegram')); }
 catch (err) { console.error('[Telegram] Module unavailable; bot disabled:', err.message); }
 const { installImageUpload } = require('./image-upload');
+const { CameraSettings, STATE_TOPIC: CAMERA_STATE_TOPIC } = require('./camera-settings');
 
 // Configuration
 const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
@@ -49,6 +50,9 @@ const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
 
 // Climate Controller State Machine
 const climate = new ClimateController(mqttClient);
+const cameraSettings = new CameraSettings({ mqttClient,
+  stateFile: process.env.CAMERA_SETTINGS_FILE || path.join(path.dirname(process.env.CLIMATE_STATE_FILE || path.join(__dirname, 'climate_state.json')), 'camera_settings.json')
+});
 
 // Historical aggregate query used by the Telegram /stats command
 const queryApi = influxDB.getQueryApi(INFLUXDB_ORG);
@@ -96,7 +100,8 @@ if (createTelegramBot) {
       climate,
       mqttClient,
       imagesDir: IMAGES_DIR,
-      queryHistory
+      queryHistory,
+      canCapture: () => cameraSettings.acceptsPhotos()
     });
   } catch (err) {
     console.error(`[${new Date().toISOString()}] [Telegram] init failed, bot disabled:`, err.message);
@@ -104,6 +109,8 @@ if (createTelegramBot) {
 }
 
 mqttClient.on('connect', () => {
+  mqttClient.subscribe(CAMERA_STATE_TOPIC, { qos: 1 });
+  cameraSettings.publish();
   console.log(`[${new Date().toISOString()}] Connected to MQTT broker at ${MQTT_HOST}:${MQTT_PORT}`);
   mqttClient.subscribe('growbox/sensors', (err) => {
     if (!err) console.log(`[${new Date().toISOString()}] Subscribed to growbox/sensors`);
@@ -198,6 +205,10 @@ function saveImageBuffer(imgBuffer, width = 1280, height = 720) {
 
 mqttClient.on('message', async (topic, message) => {
   try {
+    if (topic === CAMERA_STATE_TOPIC) {
+      cameraSettings.observeState(JSON.parse(message.toString()));
+      return;
+    }
     if (topic === 'growbox/sensors') {
       const data = JSON.parse(message.toString());
       const point = new Point('sensor_data');
@@ -247,6 +258,7 @@ mqttClient.on('message', async (topic, message) => {
     } 
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
+      cameraSettings.observeStatus(data);
       const point = new Point('relay_status');
       if (Array.isArray(data.relays)) {
         const names = ['humidifier','heater','heater_fan','fan1','fan2','backlight'];
@@ -265,6 +277,7 @@ mqttClient.on('message', async (topic, message) => {
       climate.updateHardwareStatus(data);
     }
     else if (topic === 'growbox/image/raw') {
+      if (!cameraSettings.acceptsPhotos()) return;
       console.log(`[${new Date().toISOString()}] Received raw image data via MQTT, size: ${message.length} bytes`);
       
       let base64Str = message.toString();
@@ -302,6 +315,7 @@ const app = express();
 installImageUpload(app, {
   imagesDir: IMAGES_DIR,
   token: process.env.IMAGE_UPLOAD_TOKEN,
+  acceptsPhotos: () => cameraSettings.acceptsPhotos(),
   getSensors: () => ({ ...climate.lastSensors }),
   getState: () => climate.getState(),
   onSaved: ({ filename, width, height, size }) => {
@@ -452,6 +466,16 @@ app.get('/api/auth/session', (req, res) => {
 });
 
 // Relay Control REST API (Requires valid PIN session)
+app.get('/api/camera/settings', requireTelemetryAuth, (req, res) => res.json(cameraSettings.getState()));
+app.put('/api/camera/settings', requireAuth, (req, res) => {
+  try {
+    cameraSettings.validate(req.body);
+  } catch (err) { return res.status(400).json({ error: err.message }); }
+  try {
+    return res.json(cameraSettings.update(req.body));
+  } catch (_) { return res.status(500).json({ error: 'Не удалось сохранить настройки камеры' }); }
+});
+
 app.post('/api/relay', requireAuth, (req, res) => {
   const { relay, state } = req.body;
   const result = climate.manualSetRelay(relay, state, `rest api (${getClientIp(req)})`);
@@ -495,6 +519,7 @@ app.get('/health', (req, res) => {
 
 // Ручка для принудительного снимка с камеры (требует авторизации)
 app.post('/api/capture', requireAuth, (req, res) => {
+  if (!cameraSettings.acceptsPhotos()) return res.status(409).json({ error: 'Приём фото отключён в настройках камеры' });
   mqttClient.publish('growbox/camera/capture', '1');
   console.log(`[${new Date().toISOString()}] Triggered on-demand camera capture via /api/capture`);
   res.json({ status: 'capture_triggered' });

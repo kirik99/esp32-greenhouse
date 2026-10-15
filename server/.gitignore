@@ -5,6 +5,7 @@ bridge/images/
 bridge/state/
 bridge/node_modules/
 bridge/climate_state.json
+bridge/camera_settings.json
 dashboard/node_modules/
 dashboard/dist/
 nginx/certs/

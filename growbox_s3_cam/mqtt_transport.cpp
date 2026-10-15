@@ -4,6 +4,7 @@
 #include "sensors.h"
 #include "relay.h"
 #include "camera_capture.h"
+#include "camera_settings.h"
 
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -91,6 +92,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
       int id1 = esp_mqtt_client_subscribe(client, "growbox/relay/set", 1);
       int id2 = esp_mqtt_client_subscribe(client, "growbox/camera/capture", 1);
       int id3 = esp_mqtt_client_subscribe(client, "growbox/co2/calibrate", 1);
+      esp_mqtt_client_subscribe(client, "growbox/camera/config/set", 1);
       Serial.printf("[MQTT] Subscribed to control topics (IDs: %d, %d, %d)\n", id1, id2, id3);
 
       // Publish initial status report immediately
@@ -151,6 +153,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
           }
         } else {
           Serial.printf("[MQTT ERR] JSON parse error in relay/set: %s\n", error.c_str());
+        }
+      } else if (strcmp(topic_buf, "growbox/camera/config/set") == 0) {
+        if (event->current_data_offset != 0 || event->data_len != event->total_data_len ||
+            !queue_camera_settings(data_buf, static_cast<size_t>(data_len))) {
+          Serial.println("[CAMERA CONFIG] Invalid or fragmented configuration rejected");
         }
       } else if (strcmp(topic_buf, "growbox/camera/capture") == 0) {
         Serial.println("[MQTT] Manual camera snapshot trigger received!");
@@ -364,6 +371,8 @@ void mqtt_publish_status() {
   doc["alarm"] = current_alarm;
   doc["heater_locked"] = is_heater_locked();
   doc["diag"] = sensor_diag;
+  fill_camera_settings(doc["camera_config"].to<JsonObject>());
+  doc["camera_config"]["device_id"] = client_id_str;
 
   char buffer[1024];
   size_t len = serializeJson(doc, buffer);
@@ -371,6 +380,20 @@ void mqtt_publish_status() {
   if (msg_id < 0) {
     Serial.printf("[MQTT ERR] Failed to publish growbox/status (code: %d)\n", msg_id);
   }
+}
+
+void publish_camera_settings() {
+  if (!is_connected || !mqtt_client) return;
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument doc;
+#else
+  StaticJsonDocument<512> doc;
+#endif
+  fill_camera_settings(doc.to<JsonObject>());
+  doc["device_id"] = client_id_str;
+  char payload[512];
+  size_t length = serializeJson(doc, payload, sizeof(payload));
+  esp_mqtt_client_enqueue(mqtt_client, "growbox/camera/config/state", payload, length, 1, 0, true);
 }
 
 void mqtt_publish_image(const char* json_payload) {

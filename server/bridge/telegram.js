@@ -283,6 +283,7 @@ function createTelegramBot(deps) {
     autoPhoto = process.env.TELEGRAM_AUTO_PHOTO,
     captureTimeoutMs = Number(process.env.TELEGRAM_CAPTURE_TIMEOUT_MS) || CAPTURE_TIMEOUT_MS,
     retryDelayMs = 30000,
+    canCapture = () => true,
     launchOptions = { dropPendingUpdates: true },
     logger = console
   } = deps || {};
@@ -446,6 +447,10 @@ function createTelegramBot(deps) {
   }
 
   async function captureAndSend(ctx) {
+    if (!canCapture()) {
+      await ctx.reply('⏸ Приём фото отключён в дашборде. Архив доступен через /latest.');
+      return;
+    }
     if (captureInFlight) {
       await ctx.reply('⏳ Предыдущий снимок ещё в обработке, подождите…');
       return;
