@@ -65,10 +65,16 @@ services:
       - BRIDGE_PORT=3001
       - IMAGES_DIR=/app/images
       - IMAGE_UPLOAD_TOKEN=${IMAGE_UPLOAD_TOKEN:-}
+      - CLIMATE_STATE_FILE=/app/state/climate_state.json
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_AUTO_PHOTO=${TELEGRAM_AUTO_PHOTO:-off}
+      - TELEGRAM_CAPTURE_TIMEOUT_MS=${TELEGRAM_CAPTURE_TIMEOUT_MS:-60000}
       - ADMIN_PIN=${ADMIN_PIN:-2212}
       - TZ=${TZ:-Europe/Moscow}
     volumes:
       - ./bridge/images:/app/images
+      - ./bridge/state:/app/state
     depends_on:
       - mosquitto
       - influxdb

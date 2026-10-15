@@ -7,7 +7,12 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const jpeg = require('jpeg-js');
-const { ClimateController } = require('./automation');
+const { ClimateController, isValidReading } = require('./automation');
+const { buildImageMetadata, writeImageMetadata } = require('./image-metadata');
+// Optional bot failures must not prevent the bridge from serving telemetry/photos.
+let createTelegramBot = null;
+try { ({ createTelegramBot } = require('./telegram')); }
+catch (err) { console.error('[Telegram] Module unavailable; bot disabled:', err.message); }
 const { installImageUpload } = require('./image-upload');
 
 // Configuration
@@ -44,6 +49,59 @@ const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
 
 // Climate Controller State Machine
 const climate = new ClimateController(mqttClient);
+
+// Historical aggregate query used by the Telegram /stats command
+const queryApi = influxDB.getQueryApi(INFLUXDB_ORG);
+const HISTORY_FIELDS = [
+  { field: 'air_temp', label: '🌡 Воздух', unit: '°C', digits: 1 },
+  { field: 'humidity', label: '💧 Влажность', unit: '%', digits: 0 },
+  { field: 'substrate_temp', label: '🌱 Субстрат', unit: '°C', digits: 1 },
+  { field: 'co2_ppm', label: '🫧 CO₂', unit: 'ppm', digits: 0 }
+];
+
+async function queryHistory(hours) {
+  const fieldFilter = HISTORY_FIELDS.map(f => `r._field == "${f.field}"`).join(' or ');
+  const flux = `from(bucket: "${INFLUXDB_BUCKET}")
+  |> range(start: -${hours}h)
+  |> filter(fn: (r) => r._measurement == "sensor_data")
+  |> filter(fn: (r) => ${fieldFilter})
+  |> keep(columns: ["_time", "_field", "_value"])`;
+
+  const rows = await queryApi.collectRows(flux);
+
+  return HISTORY_FIELDS.map((f) => {
+    const values = rows
+      .filter(r => r._field === f.field)
+      .map(r => Number(r._value))
+      .filter(isValidReading);
+    if (!values.length) return null;
+    return {
+      label: f.label,
+      unit: f.unit,
+      digits: f.digits,
+      count: values.length,
+      min: Math.min(...values),
+      max: Math.max(...values),
+      avg: values.reduce((a, b) => a + b, 0) / values.length
+    };
+  }).filter(Boolean);
+}
+
+// Telegram bot: token and chat allowlist come from the environment (.env -> compose),
+// never from the repository. Without a token the bot stays disabled.
+let telegram = null;
+if (createTelegramBot) {
+  try {
+    telegram = createTelegramBot({
+      climate,
+      mqttClient,
+      imagesDir: IMAGES_DIR,
+      queryHistory
+    });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] [Telegram] init failed, bot disabled:`, err.message);
+  }
+}
 
 mqttClient.on('connect', () => {
   console.log(`[${new Date().toISOString()}] Connected to MQTT broker at ${MQTT_HOST}:${MQTT_PORT}`);
@@ -98,6 +156,7 @@ function saveImageBuffer(imgBuffer, width = 1280, height = 720) {
   const ss = pad(now.getSeconds());
   const filename = `${y}-${m}-${d}_${hh}-${mm}-${ss}.jpg`;
   const filepath = path.join(IMAGES_DIR, filename);
+  let savedSize = imgBuffer.length;
 
   if (imgBuffer.length > 4 && imgBuffer[0] === 0xFF && imgBuffer[1] === 0xD8) {
     // Native JPEG from hardware camera (OV2640 / esp_camera)
@@ -118,12 +177,17 @@ function saveImageBuffer(imgBuffer, width = 1280, height = 720) {
     }, 85);
     
     fs.writeFileSync(filepath, jpegData.data);
+    savedSize = jpegData.data.length;
     console.log(`[${new Date().toISOString()}] YUY2 converted to JPEG and saved to ${filepath}`);
   }
 
+  writeImageMetadata(filepath, buildImageMetadata(climate.getState(), {
+    receivedAt: now, width, height, sizeBytes: savedSize
+  }));
+  if (telegram) telegram.onImageSaved(filename);
   const photoPoint = new Point('camera_capture')
     .stringField('filename', filename)
-    .intField('size_bytes', imgBuffer.length)
+    .intField('size_bytes', savedSize)
     .intField('width', width)
     .intField('height', height);
   writeApi.writePoint(photoPoint);
@@ -239,7 +303,10 @@ installImageUpload(app, {
   imagesDir: IMAGES_DIR,
   token: process.env.IMAGE_UPLOAD_TOKEN,
   getSensors: () => ({ ...climate.lastSensors }),
+  getState: () => climate.getState(),
   onSaved: ({ filename, width, height, size }) => {
+    // Resolve /photo and forward auto photos only after JPEG + sidecar are saved.
+    if (telegram) telegram.onImageSaved(filename);
     writeApi.writePoint(new Point('camera_capture').stringField('filename', filename)
       .intField('size_bytes', size).intField('width', width).intField('height', height));
     mqttClient.publish('growbox/camera/updated', JSON.stringify({ filename }), { qos: 1 });
@@ -248,9 +315,7 @@ installImageUpload(app, {
 });
 app.use(cors()); // Разрешаем CORS для локальной разработки
 
-// Raw binary parser for direct camera image upload (ESP32 HTTP POST)
-app.use('/api/upload-image', express.raw({ type: ['image/jpeg', 'image/*', 'application/octet-stream'], limit: '10mb' }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 
 // PIN Authentication, Brute-force Protection & Session Management
 const ADMIN_PIN = process.env.ADMIN_PIN || '2212';
@@ -389,13 +454,12 @@ app.get('/api/auth/session', (req, res) => {
 // Relay Control REST API (Requires valid PIN session)
 app.post('/api/relay', requireAuth, (req, res) => {
   const { relay, state } = req.body;
-  if (typeof relay !== 'number' || typeof state !== 'boolean' || relay < 1 || relay > 6) {
-    return res.status(400).json({ success: false, error: 'Invalid relay (1-6) or state (boolean)' });
+  const result = climate.manualSetRelay(relay, state, `rest api (${getClientIp(req)})`);
+  if (!result.ok) {
+    console.warn(`[${new Date().toISOString()}] Relay command refused: ${result.error}`);
+    return res.status(result.kind === 'invalid' ? 400 : 409).json({ success: false, error: result.error });
   }
-  const payload = JSON.stringify({ relay, state });
-  mqttClient.publish('growbox/relay/set', payload);
-  console.log(`[${new Date().toISOString()}] Relay ${relay} set to ${state} via authenticated REST API`);
-  res.json({ success: true, relay, state });
+  res.json({ success: true, relay: result.relay, state: result.state });
 });
 
 // Climate Controller REST API
@@ -427,39 +491,6 @@ app.post('/api/climate/setpoints', requireAuth, (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', climate_mode: climate.mode });
-});
-
-// Прямой HTTP POST для загрузки фото с ESP32 (без WebSocket и Base64 оверхеда)
-app.post('/api/upload-image', (req, res) => {
-  try {
-    let imgBuffer = null;
-    let width = 1280;
-    let height = 720;
-
-    if (Buffer.isBuffer(req.body)) {
-      imgBuffer = req.body;
-    } else if (req.body && typeof req.body === 'object' && req.body.data) {
-      imgBuffer = Buffer.from(req.body.data, 'base64');
-      if (req.body.width) width = req.body.width;
-      if (req.body.height) height = req.body.height;
-    }
-
-    if (!imgBuffer || imgBuffer.length < 100) {
-      console.warn(`[${new Date().toISOString()}] Rejected /api/upload-image: empty or invalid payload`);
-      return res.status(400).json({ success: false, error: 'Empty or invalid image payload' });
-    }
-
-    const result = saveImageBuffer(imgBuffer, width, height);
-    if (!result.success) {
-      return res.status(400).json(result);
-    }
-
-    console.log(`[${new Date().toISOString()}] Successfully accepted image upload via HTTP POST (${imgBuffer.length} bytes -> ${result.filename})`);
-    res.json({ success: true, filename: result.filename, size: imgBuffer.length });
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] Error in /api/upload-image:`, err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
 });
 
 // Ручка для принудительного снимка с камеры (требует авторизации)
@@ -505,19 +536,46 @@ app.get('/api/latest-image', requireTelemetryAuth, (req, res) => {
   });
 });
 
-app.listen(BRIDGE_PORT, () => {
-  console.log(`[${new Date().toISOString()}] Bridge service listening on port ${BRIDGE_PORT}`);
+const httpServer = app.listen(BRIDGE_PORT, () => {
+  const port = httpServer.address()?.port ?? BRIDGE_PORT;
+  console.log(`[${new Date().toISOString()}] Bridge service listening on port ${port}`);
 });
 
-// Handle graceful shutdown
-process.on('SIGINT', async () => {
-  console.log(`[${new Date().toISOString()}] Shutting down...`);
+// Handle graceful shutdown (docker sends SIGTERM, Ctrl+C sends SIGINT)
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[${new Date().toISOString()}] Shutting down (${signal})...`);
+
+  if (telegram) {
+    try {
+      await telegram.stop();
+      console.log(`[${new Date().toISOString()}] Telegram bot stopped`);
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] Error stopping Telegram bot:`, err.message);
+    }
+  }
+
+  climate.stop();
+
   try {
     await writeApi.close();
     console.log(`[${new Date().toISOString()}] InfluxDB write API closed`);
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Error closing InfluxDB write API:`, err);
   }
-  mqttClient.end();
+
+  try {
+    mqttClient.end(true);
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Error closing MQTT client:`, err.message);
+  }
+
+  // Do not let a stuck socket keep the container alive after SIGTERM.
+  setTimeout(() => process.exit(0), 1500).unref();
   process.exit(0);
-});
+}
+
+process.on('SIGINT', () => { shutdown('SIGINT'); });
+process.on('SIGTERM', () => { shutdown('SIGTERM'); });

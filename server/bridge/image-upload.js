@@ -3,8 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const jpeg = require('jpeg-js');
+const { buildImageMetadata } = require('./image-metadata');
 
-function installImageUpload(app, { imagesDir, token, getSensors, onSaved, maxBytes = 1024 * 1024 }) {
+function installImageUpload(app, { imagesDir, token, getSensors, getState, onSaved, maxBytes = 1024 * 1024 }) {
   const raw = express.raw({ type: 'image/jpeg', limit: maxBytes, inflate: false });
   app.post('/api/upload-image', (req, res, next) => {
     if (!token || token.length < 32) return res.status(503).json({ error: 'Image upload disabled' });
@@ -35,10 +36,10 @@ function installImageUpload(app, { imagesDir, token, getSensors, onSaved, maxByt
     try {
       fs.mkdirSync(imagesDir, { recursive: true });
       fs.writeFileSync(filepath, body, { flag: 'wx' });
-      fs.writeFileSync(filepath + '.json', JSON.stringify({
-        received_at: now.toISOString(), sensors: getSensors(), width: image.width,
-        height: image.height, size_bytes: body.length, transport: 'https'
-      }), { flag: 'wx' });
+      const metadata = buildImageMetadata(getState ? getState() : { lastSensors: getSensors() }, {
+        receivedAt: now, width: image.width, height: image.height, sizeBytes: body.length
+      });
+      fs.writeFileSync(filepath + '.json', JSON.stringify({ ...metadata, transport: 'https' }), { flag: 'wx' });
     } catch (_) {
       // Roll back incomplete files; no user-provided path is ever used.
       for (const file of [filepath, filepath + '.json']) { try { fs.unlinkSync(file); } catch (_) {} }

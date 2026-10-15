@@ -19,7 +19,22 @@
 const fs = require('fs');
 const path = require('path');
 
-const CONFIG_FILE = path.join(__dirname, 'climate_state.json');
+// Persisted controller state; overridable so tests and side-by-side deployments
+// never touch the live mode file.
+const CONFIG_FILE = process.env.CLIMATE_STATE_FILE || path.join(__dirname, 'climate_state.json');
+
+// Relay labels (index = relayId - 1), shared by the controller, REST API and Telegram bot
+const RELAY_NAMES = ['Увлажнитель', 'Нагреватель', 'Вент. нагревателя', 'Приток/Циркуляция', 'Вытяжка', 'Подсветка'];
+const NUM_RELAYS = RELAY_NAMES.length;
+
+// Firmware publishes telemetry every 30 s; readings older than this are not trustworthy
+// for switching power equipment.
+const SENSOR_STALE_MS = 120000;
+
+/** A reading is usable only if it is a finite number and not the firmware's -999 "no data" sentinel. */
+function isValidReading(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > -900;
+}
 
 const DEFAULT_PROFILES = {
   incubation: {
@@ -164,6 +179,13 @@ class ClimateController {
           this.profiles = { ...this.profiles, ...parsed.profiles };
         }
         console.log(`[Climate] Loaded persisted state. Active mode: ${this.mode}`);
+      } else {
+        // Loud on purpose: without the state file the controller falls back to the
+        // default phase and would drive the equipment accordingly.
+        console.warn(
+          `[Climate] No persisted state at ${CONFIG_FILE} - starting with the default phase "${this.mode}". ` +
+          'Set the phase explicitly (/mode, dashboard or POST /api/climate/mode) if that is not intended.'
+        );
       }
     } catch (e) {
       console.error('[Climate] Error loading state file:', e.message);
@@ -177,6 +199,9 @@ class ClimateController {
         profiles: this.profiles,
         saved_at: new Date().toISOString()
       };
+      // The state file normally lives on a mounted volume; create the directory so a
+      // missing mount never silently swallows the phase change.
+      fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(payload, null, 2), 'utf8');
     } catch (e) {
       console.error('[Climate] Error saving state file:', e.message);
@@ -233,6 +258,58 @@ class ClimateController {
   }
 
   /**
+   * Evaluate hardware safety cutoffs from the latest readings.
+   *
+   * Single source of truth for the automatic state machine AND manual commands:
+   *  - OVERHEAT:      substrate >= 29 °C or air >= 40 °C  -> heater cut off
+   *  - OVERHUMIDITY:  RH >= 98 %                          -> humidifier cut off
+   *  - SENSOR_FAIL:   control temperature channel missing/-999 (auto modes) -> heater cut off
+   *
+   * @returns {{heaterCutoff: boolean, humidifierCutoff: boolean, alert: (string|null), substates: string[]}}
+   */
+  safetyFlags() {
+    const s = this.lastSensors;
+    const profile = this.profiles[this.mode];
+    const flags = { heaterCutoff: false, humidifierCutoff: false, alert: null, substates: [] };
+
+    if ((s.substrate_temp !== null && s.substrate_temp >= 29.0) ||
+        (s.air_temp !== null && s.air_temp >= 40.0)) {
+      flags.heaterCutoff = true;
+      flags.alert = 'OVERHEAT';
+      flags.substates.push('АВАРИЯ: ПЕРЕГРЕВ');
+    }
+
+    if (s.humidity !== null && s.humidity >= 98.0) {
+      flags.humidifierCutoff = true;
+      flags.alert = 'OVERHUMIDITY';
+      flags.substates.push('ОТСЕЧКА ВЛАЖНОСТИ');
+    }
+
+    if (this.mode !== 'manual') {
+      const tempSensorVal = profile.controlTempBy === 'substrate' ? s.substrate_temp : s.air_temp;
+      if (tempSensorVal === null || tempSensorVal <= -900) {
+        flags.heaterCutoff = true;
+        flags.alert = 'SENSOR_FAIL';
+        flags.substates.push('СБОЙ ДАТЧИКА');
+      }
+    }
+
+    return flags;
+  }
+
+  /** True when a telemetry packet arrived recently enough to act on. */
+  sensorsAreFresh(maxAgeMs = SENSOR_STALE_MS) {
+    const updatedAt = this.lastSensors.updated_at;
+    return Boolean(updatedAt) && (Date.now() - updatedAt) <= maxAgeMs;
+  }
+
+  /** Sensor channel backing the heater decision for the active phase. */
+  heaterControlChannel(mode = this.mode) {
+    const profile = this.profiles[mode] || {};
+    return profile.controlTempBy === 'substrate' ? 'substrate_temp' : 'air_temp';
+  }
+
+  /**
    * Process newly arrived sensor data from ESP32
    */
   processSensors(data) {
@@ -259,39 +336,11 @@ class ClimateController {
 
     // Default desired relays clone current state
     const desired = [...this.currentRelays];
-    let activeSubstates = [];
-    this.safetyAlert = null;
-
-    // -------------------------------------------------------------
-    // STEP 1: SAFETY OVERRIDES (Highest Priority)
-    // -------------------------------------------------------------
-    let safetyHeaterCutoff = false;
-    let safetyHumidifierCutoff = false;
-
-    // Overheat safety: Substrate >= 29°C or Air >= 40°C
-    if ((s.substrate_temp !== null && s.substrate_temp >= 29.0) || 
-        (s.air_temp !== null && s.air_temp >= 40.0)) {
-      safetyHeaterCutoff = true;
-      this.safetyAlert = 'OVERHEAT';
-      activeSubstates.push('АВАРИЯ: ПЕРЕГРЕВ');
-    }
-
-    // Overhumidity cutoff: >= 98%
-    if (s.humidity !== null && s.humidity >= 98.0) {
-      safetyHumidifierCutoff = true;
-      this.safetyAlert = 'OVERHUMIDITY';
-      activeSubstates.push('ОТСЕЧКА ВЛАЖНОСТИ');
-    }
-
-    // Critical sensor disconnect during automatic temperature control
-    if (this.mode !== 'manual') {
-      const tempSensorVal = profile.controlTempBy === 'substrate' ? s.substrate_temp : s.air_temp;
-      if (tempSensorVal === null || tempSensorVal <= -900) {
-        safetyHeaterCutoff = true;
-        this.safetyAlert = 'SENSOR_FAIL';
-        activeSubstates.push('СБОЙ ДАТЧИКА');
-      }
-    }
+    const safety = this.safetyFlags();
+    const activeSubstates = [...safety.substates];
+    const safetyHeaterCutoff = safety.heaterCutoff;
+    const safetyHumidifierCutoff = safety.humidifierCutoff;
+    this.safetyAlert = safety.alert;
 
     // If in MANUAL mode, apply safety overrides and return
     if (this.mode === 'manual') {
@@ -501,9 +550,77 @@ class ClimateController {
     }
   }
 
+  /**
+   * Manual relay command for the REST API and the Telegram bot.
+   *
+   * Switching equipment OFF is always allowed (emergency action). Switching ON is
+   * validated first, so a forbidden command is never published to MQTT, not even briefly:
+   *  - relay id must be an integer within 1..NUM_RELAYS, state must be a boolean;
+   *  - the sensor channel protecting that equipment must deliver a valid, recent reading;
+   *  - active safety cutoffs (OVERHEAT / OVERHUMIDITY) block the matching equipment.
+   *
+   * @returns {{ok: boolean, relay?: number, state?: boolean, error?: string, emergency?: boolean}}
+   */
+  manualSetRelay(relayId, state, source = 'manual') {
+    const id = Number(relayId);
+
+    if (!Number.isInteger(id) || id < 1 || id > NUM_RELAYS) {
+      return { ok: false, kind: 'invalid', error: `Недопустимый номер реле: ${relayId} (допустимо 1..${NUM_RELAYS})` };
+    }
+    if (typeof state !== 'boolean') {
+      return { ok: false, kind: 'invalid', error: `Состояние реле должно быть boolean (true/false), получено: ${JSON.stringify(state)}` };
+    }
+
+    // Turning equipment OFF is the emergency action - never blocked by safeguards.
+    if (state === false) {
+      this.requestRelay(id, false, true);
+      return { ok: true, relay: id, state: false, emergency: true };
+    }
+
+    const flags = this.safetyFlags();
+
+    if (id === 2) {
+      if (flags.heaterCutoff) {
+        return { ok: false, kind: 'blocked', error: `Включение нагревателя заблокировано защитой: ${flags.alert}` };
+      }
+      const channel = this.heaterControlChannel();
+      if (!isValidReading(this.lastSensors[channel])) {
+        return { ok: false, kind: 'blocked', error: `Нет валидных данных датчика ${this.getSensorName(channel)} — включение нагревателя запрещено` };
+      }
+      if (!this.sensorsAreFresh()) {
+        return { ok: false, kind: 'blocked', error: `Данные датчиков устарели (${Math.round((Date.now() - this.lastSensors.updated_at) / 1000)} с) — включение нагревателя запрещено` };
+      }
+    }
+
+    if (id === 1) {
+      if (flags.humidifierCutoff) {
+        return { ok: false, kind: 'blocked', error: 'Включение увлажнителя заблокировано защитой: OVERHUMIDITY (≥ 98 %)' };
+      }
+      if (!isValidReading(this.lastSensors.humidity)) {
+        return { ok: false, kind: 'blocked', error: 'Нет валидных данных датчика влажности — включение увлажнителя запрещено' };
+      }
+      if (!this.sensorsAreFresh()) {
+        return { ok: false, kind: 'blocked', error: `Данные датчиков устарели (${Math.round((Date.now() - this.lastSensors.updated_at) / 1000)} с) — включение увлажнителя запрещено` };
+      }
+    }
+
+    this.requestRelay(id, true);
+    console.log(`[Climate] Manual relay ${id} (${this.getRelayName(id)}) = ON via ${source}`);
+    return { ok: true, relay: id, state: true };
+  }
+
+  getSensorName(channel) {
+    return { air_temp: 'воздуха', substrate_temp: 'субстрата', humidity: 'влажности', co2_ppm: 'CO₂' }[channel] || channel;
+  }
+
   getRelayName(id) {
-    const names = ['Увлажнитель', 'Нагреватель', 'Вент. нагревателя', 'Приток/Циркуляция', 'Вытяжка', 'Подсветка'];
-    return names[id - 1] || `Relay ${id}`;
+    return RELAY_NAMES[id - 1] || `Relay ${id}`;
+  }
+
+  /** Stop background loops (used on shutdown and by tests). */
+  stop() {
+    clearInterval(this.evalInterval);
+    clearInterval(this.heartbeatInterval);
   }
 
   getState() {
@@ -541,4 +658,4 @@ class ClimateController {
   }
 }
 
-module.exports = { ClimateController, DEFAULT_PROFILES };
+module.exports = { ClimateController, DEFAULT_PROFILES, RELAY_NAMES, NUM_RELAYS, SENSOR_STALE_MS, isValidReading };

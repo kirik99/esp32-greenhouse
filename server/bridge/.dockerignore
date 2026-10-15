@@ -1,0 +1,7 @@
+node_modules
+images
+state
+climate_state.json
+.env
+.env.*
+source.tar.gz
