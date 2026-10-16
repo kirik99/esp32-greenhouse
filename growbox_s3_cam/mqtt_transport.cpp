@@ -5,6 +5,7 @@
 #include "relay.h"
 #include "camera_capture.h"
 #include "camera_settings.h"
+#include "ota_update.h"
 
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -93,6 +94,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
       int id2 = esp_mqtt_client_subscribe(client, "growbox/camera/capture", 1);
       int id3 = esp_mqtt_client_subscribe(client, "growbox/co2/calibrate", 1);
       esp_mqtt_client_subscribe(client, "growbox/camera/config/set", 1);
+      char ota_topic[80];
+      snprintf(ota_topic, sizeof(ota_topic), "growbox/ota/%s/set", client_id_str);
+      esp_mqtt_client_subscribe(client, ota_topic, 1);
       Serial.printf("[MQTT] Subscribed to control topics (IDs: %d, %d, %d)\n", id1, id2, id3);
 
       // Publish initial status report immediately
@@ -137,7 +141,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
       Serial.printf("[MQTT MSG] Topic: %s (len: %d) -> %s\n", topic_buf, data_len, data_buf);
 
-      if (strcmp(topic_buf, "growbox/relay/set") == 0) {
+      char ota_topic[80];
+      snprintf(ota_topic, sizeof(ota_topic), "growbox/ota/%s/set", client_id_str);
+      if (strcmp(topic_buf, ota_topic) == 0) {
+        if (event->retain || event->current_data_offset != 0 || event->data_len != event->total_data_len ||
+            !queue_ota(data_buf, static_cast<size_t>(data_len))) Serial.println("[OTA] Command rejected");
+      } else if (strcmp(topic_buf, "growbox/relay/set") == 0) {
         #if ARDUINOJSON_VERSION_MAJOR >= 7
         JsonDocument doc;
         #else
@@ -359,7 +368,7 @@ void mqtt_publish_status() {
   #if ARDUINOJSON_VERSION_MAJOR >= 7
   JsonDocument doc;
   #else
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<2048> doc;
   #endif
 
   for (int i = 1; i <= 6; i++) {
@@ -372,10 +381,11 @@ void mqtt_publish_status() {
   doc["heater_locked"] = is_heater_locked();
   doc["diag"] = sensor_diag;
   fill_camera_settings(doc["camera_config"].to<JsonObject>());
+  fill_ota_status(doc["ota"].to<JsonObject>());
   doc["camera_config"]["device_id"] = client_id_str;
 
-  char buffer[1024];
-  size_t len = serializeJson(doc, buffer);
+  char buffer[2048];
+  size_t len = serializeJson(doc, buffer, sizeof(buffer));
   int msg_id = esp_mqtt_client_publish(mqtt_client, "growbox/status", buffer, len, 0, 0);
   if (msg_id < 0) {
     Serial.printf("[MQTT ERR] Failed to publish growbox/status (code: %d)\n", msg_id);

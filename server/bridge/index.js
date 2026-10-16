@@ -43,6 +43,7 @@ writeApi.useDefaultTags({ location: 'growbox' });
 
 // MQTT Setup with Authentication
 const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
+  queueQoSZero: false, // Never queue stale control/OTA commands across disconnects.
   username: MQTT_USER,
   password: MQTT_PASSWORD,
   clientId: `growbox_bridge_${Math.random().toString(16).slice(2, 8)}`
@@ -53,6 +54,8 @@ const climate = new ClimateController(mqttClient);
 const cameraSettings = new CameraSettings({ mqttClient,
   stateFile: process.env.CAMERA_SETTINGS_FILE || path.join(path.dirname(process.env.CLIMATE_STATE_FILE || path.join(__dirname, 'climate_state.json')), 'camera_settings.json')
 });
+const { OtaController } = require('./ota');
+const ota = new OtaController({ mqtt:mqttClient, climate, publicKey:process.env.OTA_SIGNING_PUBLIC_KEY || '' });
 
 // Historical aggregate query used by the Telegram /stats command
 const queryApi = influxDB.getQueryApi(INFLUXDB_ORG);
@@ -259,6 +262,7 @@ mqttClient.on('message', async (topic, message) => {
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
       cameraSettings.observeStatus(data);
+      ota.observe(data);
       const point = new Point('relay_status');
       if (Array.isArray(data.relays)) {
         const names = ['humidifier','heater','heater_fan','fan1','fan2','backlight'];
@@ -312,6 +316,7 @@ setInterval(() => {
 
 // Express App setup
 const app = express();
+require('./ota-download').installFirmwareDownload(app, {directory:process.env.OTA_ARTIFACT_DIR,token:process.env.OTA_DOWNLOAD_TOKEN});
 installImageUpload(app, {
   imagesDir: IMAGES_DIR,
   token: process.env.IMAGE_UPLOAD_TOKEN,
@@ -466,6 +471,11 @@ app.get('/api/auth/session', (req, res) => {
 });
 
 // Relay Control REST API (Requires valid PIN session)
+app.get('/api/ota/status', requireAuth, (req, res) => res.json(ota.getState()));
+app.post('/api/ota/start', requireAuth, async (req, res) => {
+  try { res.status(202).json(await ota.start(req.body)); }
+  catch (err) { res.status(409).json({error:err.message}); }
+});
 app.get('/api/camera/settings', requireTelemetryAuth, (req, res) => res.json(cameraSettings.getState()));
 app.put('/api/camera/settings', requireAuth, (req, res) => {
   try {

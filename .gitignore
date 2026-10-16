@@ -53,3 +53,4 @@ server/bridge/data/
 # Local browser verification artifacts
 .playwright-cli/
 output/playwright/
+server/bridge/firmware/

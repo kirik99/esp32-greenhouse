@@ -3,6 +3,7 @@ images
 state
 climate_state.json
 camera_settings.json
+firmware/
 .env
 .env.*
 source.tar.gz

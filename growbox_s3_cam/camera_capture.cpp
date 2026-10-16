@@ -9,6 +9,7 @@
 #include "esp_crt_bundle.h"
 #include <atomic>
 #include "camera_settings.h"
+#include "ota_update.h"
 
 #ifndef IMAGE_UPLOAD_URL
 #define IMAGE_UPLOAD_URL ""
@@ -21,6 +22,7 @@ static std::atomic<bool> camera_ready{false};
 static std::atomic<bool> force_capture{false};
 
 static std::atomic<bool> upload_in_progress{false};
+bool camera_upload_busy() { return upload_in_progress.load(); }
 
 // The worker owns the camera frame until HTTP has finished. No Base64 allocation,
 // no large MQTT packet, and no networking wait in the control/safety loop.
@@ -168,6 +170,7 @@ void setup_camera() {
 }
 
 void process_camera() {
+  if (ota_busy()) return;
   if (!camera_ready || upload_in_progress.load() || WiFi.status() != WL_CONNECTED) return;
   if (strncmp(IMAGE_UPLOAD_URL, "https://", 8) != 0 || strlen(IMAGE_UPLOAD_TOKEN) < 32) return;
 

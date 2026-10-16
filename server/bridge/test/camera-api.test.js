@@ -23,11 +23,15 @@ test('camera API requires PIN and enforces persistent reception pause',async()=>
    while(!/listening on port (\d+)/.test(output)){if(Date.now()>end)throw Error('Boot timeout');await sleep(30)}
    const base='http://127.0.0.1:'+output.match(/listening on port (\d+)/)[1];
    assert.equal((await fetch(base+'/api/camera/settings')).status,401);
+   assert.equal((await fetch(base+'/api/ota/status')).status,401);
+   assert.equal((await fetch(base+'/api/ota/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
    const input={reception_enabled:true,auto_enabled:false,interval_seconds:600};
    assert.equal((await fetch(base+'/api/camera/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).status,401);
    const auth=await fetch(base+'/api/auth/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:'test-pin'})}).then(r=>r.json());
    assert.equal(auth.success,true);
    const headers={'Content-Type':'application/json',Authorization:'Bearer '+auth.token};
+   assert.equal((await fetch(base+'/api/ota/status',{headers}).then(r=>r.json())).configured,false);
+   assert.equal((await fetch(base+'/api/ota/start',{method:'POST',headers,body:'{}'})).status,409);
    const initial=await fetch(base+'/api/camera/settings',{headers}).then(r=>r.json());
    assert.equal(initial.settings.reception_enabled,false);
    assert.equal((await fetch(base+'/api/capture',{method:'POST',headers})).status,409);
