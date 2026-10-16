@@ -17,6 +17,7 @@ bool mqtt_is_connected();
 // Telemetry & Status Publishing
 void mqtt_publish_sensors();
 void mqtt_publish_status();
+void publish_camera_settings();
 
 // Camera Publishing (Executed from background FreeRTOS task on Core 0)
 void mqtt_publish_image(const char* json_payload);

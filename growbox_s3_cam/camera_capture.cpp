@@ -8,6 +8,8 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include <atomic>
+#include "camera_settings.h"
+#include "ota_update.h"
 
 #ifndef IMAGE_UPLOAD_URL
 #define IMAGE_UPLOAD_URL ""
@@ -16,12 +18,11 @@
 #define IMAGE_UPLOAD_TOKEN ""
 #endif
 
-static bool camera_ready = false;
-static unsigned long last_photo_time = 0;
-static bool initial_photo_sent = false;
-static volatile bool force_capture = false;
+static std::atomic<bool> camera_ready{false};
+static std::atomic<bool> force_capture{false};
 
 static std::atomic<bool> upload_in_progress{false};
+bool camera_upload_busy() { return upload_in_progress.load(); }
 
 // The worker owns the camera frame until HTTP has finished. No Base64 allocation,
 // no large MQTT packet, and no networking wait in the control/safety loop.
@@ -169,27 +170,13 @@ void setup_camera() {
 }
 
 void process_camera() {
-  if (!camera_ready || upload_in_progress.load()) return;
+  if (ota_busy()) return;
+  if (!camera_ready || upload_in_progress.load() || WiFi.status() != WL_CONNECTED) return;
   if (strncmp(IMAGE_UPLOAD_URL, "https://", 8) != 0 || strlen(IMAGE_UPLOAD_TOKEN) < 32) return;
 
   unsigned long now = millis();
-  bool should_capture = false;
-
-  // Initial photo 20s after startup once sensors have settled and reported
-  if (!initial_photo_sent && now > 20000 && mqtt_is_connected()) {
-    should_capture = true;
-  }
-
-  // Periodic capture (every CAMERA_INTERVAL)
-  if (now - last_photo_time >= CAMERA_INTERVAL && mqtt_is_connected()) {
-    should_capture = true;
-  }
-
-  // Force capture triggered via MQTT
-  if (force_capture && mqtt_is_connected()) {
-    should_capture = true;
-    force_capture = false;
-  }
+  bool should_capture = camera_auto_capture_due(now);
+  if (force_capture.exchange(false)) should_capture = true;
 
   if (should_capture) {
     camera_fb_t *fb = esp_camera_fb_get();
@@ -204,8 +191,7 @@ void process_camera() {
       return;
     }
 
-    initial_photo_sent = true;
-    last_photo_time = now;
+    camera_capture_started(now);
 
     Serial.printf("[CAMERA] Captured JPEG: %u bytes (%ux%u). Uploading via HTTPS...\n",
                   (unsigned int)fb->len, (unsigned int)fb->width, (unsigned int)fb->height);

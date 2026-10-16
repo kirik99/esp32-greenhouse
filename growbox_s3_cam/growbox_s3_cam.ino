@@ -8,6 +8,8 @@
 #include "sensors.h"
 #include "mqtt_transport.h"
 #include "camera_capture.h"
+#include "camera_settings.h"
+#include "ota_update.h"
 
 unsigned long last_sensor_time = 0;
 unsigned long last_status_time = 0;
@@ -76,8 +78,10 @@ void setup() {
   logMsg("========================================");
 
   setup_relays();
+  setup_ota();
   setup_sensors();
   setup_wifi();
+  setup_camera_settings();
   setup_mqtt();
   setup_camera();
 
@@ -85,6 +89,8 @@ void setup() {
 }
 
 void loop() {
+  process_ota();
+  process_camera_settings();
   static unsigned long last_wifi_retry = 0;
   unsigned long now = millis();
 

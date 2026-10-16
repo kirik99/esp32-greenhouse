@@ -56,7 +56,7 @@
 // --- 6. Intervals (ms) ---
 #define SENSOR_INTERVAL 10000   // 10s for responsive local monitoring
 #define STATUS_INTERVAL 10000   // 10s
-#define CAMERA_INTERVAL 60000   // 60s (or trigger via MQTT / web dashboard)
+#define CAMERA_DEFAULT_INTERVAL_SECONDS 600 // Server-controlled; auto capture defaults OFF.
 
 // Frozen-reading detection
 #define BME_STALE_CYCLES 3
