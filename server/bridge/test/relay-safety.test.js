@@ -121,15 +121,46 @@ test('heater ON is refused when telemetry is stale', () => {
   assert.equal(mqtt.relayCommands().length, 0);
 });
 
-test('humidifier ON is refused without valid humidity data', () => {
+test('humidifier ON is allowed without valid humidity data (sensor disconnected)', () => {
   const { climate, mqtt } = makeController();
   climate.processSensors({ air_temp: 20, humidity: -999, substrate_temp: 20, co2_ppm: 800 });
   mqtt.clear();
 
   const result = climate.manualSetRelay(1, true);
-  assert.equal(result.ok, false);
-  assert.match(result.error, /влажност/);
-  assert.equal(mqtt.relayCommands().length, 0);
+  assert.equal(result.ok, true, 'manual humidifier ON must succeed even if humidity is -999');
+  assert.deepEqual(mqtt.relayCommands(), [{ relay: 1, state: true }]);
+});
+
+test('humidifier ON is allowed even with no sensor telemetry at all', () => {
+  const { climate, mqtt } = makeController(); // no telemetry at all
+  const result = climate.manualSetRelay(1, true);
+  assert.equal(result.ok, true);
+  assert.deepEqual(mqtt.relayCommands(), [{ relay: 1, state: true }]);
+});
+
+test('auto mode flags sensor unavailable and does not start humidifier without sensor', () => {
+  const { climate, mqtt } = makeController();
+  climate.mode = 'fruiting';
+  climate.processSensors({ air_temp: 20, humidity: -999, substrate_temp: 20, co2_ppm: 800 });
+  climate.evaluate();
+
+  assert.match(climate.substate, /Влажность: датчик недоступен/);
+  assert.equal(climate.currentRelays[0], false, 'auto mode must not turn on humidifier without valid humidity');
+});
+
+test('humidifier max continuous runtime shuts off humidifier after 15 minutes', () => {
+  const { climate, mqtt } = makeController();
+  climate.processSensors({ air_temp: 20, humidity: 60, substrate_temp: 20, co2_ppm: 800 });
+  climate.manualSetRelay(1, true);
+  assert.equal(climate.currentRelays[0], true);
+  mqtt.clear();
+
+  // Advance time past 15 minutes (900000 ms)
+  climate.humidifierOnTime = Date.now() - 900001;
+  climate.evaluate();
+
+  assert.equal(climate.currentRelays[0], false, 'humidifier must be shut off after exceeding max runtime');
+  assert.equal(mqtt.relayCommands().some(c => c.relay === 1 && c.state === false), true);
 });
 
 test('fans, heater fan and light only need a valid relay id', () => {

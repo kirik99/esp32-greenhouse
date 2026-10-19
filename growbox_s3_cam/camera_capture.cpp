@@ -10,6 +10,7 @@
 #include <atomic>
 #include "camera_settings.h"
 #include "ota_update.h"
+#include "relay.h"
 
 #ifndef IMAGE_UPLOAD_URL
 #define IMAGE_UPLOAD_URL ""
@@ -20,6 +21,14 @@
 
 static std::atomic<bool> camera_ready{false};
 static std::atomic<bool> force_capture{false};
+
+enum CameraCaptureState {
+  CAM_STATE_IDLE,
+  CAM_STATE_WARMUP
+};
+static CameraCaptureState capture_state = CAM_STATE_IDLE;
+static unsigned long warmup_start_ms = 0;
+static const unsigned long LIGHT_WARMUP_MS = 3000;
 
 static std::atomic<bool> upload_in_progress{false};
 bool camera_upload_busy() { return upload_in_progress.load(); }
@@ -82,6 +91,14 @@ static void upload_photo_task(void *arg) {
 }
 
 void trigger_camera_capture() {
+  if (upload_in_progress.load()) {
+    Serial.println("[CAMERA] Capture request ignored: upload already in progress");
+    return;
+  }
+  if (capture_state == CAM_STATE_WARMUP) {
+    Serial.println("[CAMERA] Capture request received while already warming up light; request merged");
+    return;
+  }
   Serial.println("[CAMERA] Manual snapshot capture triggered via MQTT!");
   force_capture = true;
 }
@@ -170,21 +187,64 @@ void setup_camera() {
 }
 
 void process_camera() {
-  if (ota_busy()) return;
-  if (!camera_ready || upload_in_progress.load() || WiFi.status() != WL_CONNECTED) return;
-  if (strncmp(IMAGE_UPLOAD_URL, "https://", 8) != 0 || strlen(IMAGE_UPLOAD_TOKEN) < 32) return;
+  // Safety / abort conditions: ensure Relay 6 is turned OFF if warmup was in progress
+  if (ota_busy() || !camera_ready || WiFi.status() != WL_CONNECTED ||
+      strncmp(IMAGE_UPLOAD_URL, "https://", 8) != 0 || strlen(IMAGE_UPLOAD_TOKEN) < 32) {
+    if (capture_state == CAM_STATE_WARMUP) {
+      set_relay(6, false);
+      Serial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light OFF.");
+      capture_state = CAM_STATE_IDLE;
+    }
+    return;
+  }
+
+  if (upload_in_progress.load()) {
+    if (capture_state == CAM_STATE_WARMUP) {
+      set_relay(6, false);
+      capture_state = CAM_STATE_IDLE;
+    }
+    return;
+  }
 
   unsigned long now = millis();
-  bool should_capture = camera_auto_capture_due(now);
-  if (force_capture.exchange(false)) should_capture = true;
 
-  if (should_capture) {
+  if (capture_state == CAM_STATE_IDLE) {
+    bool auto_due = camera_auto_capture_due(now);
+    bool force_due = force_capture.exchange(false);
+    if (auto_due || force_due) {
+      Serial.printf("[CAMERA] Triggering capture sequence (%s). Turning light ON (Relay 6), 3s warmup...\n",
+                    force_due ? "on-demand" : "scheduled");
+      set_relay(6, true);
+      warmup_start_ms = now;
+      capture_state = CAM_STATE_WARMUP;
+    }
+    return;
+  }
+
+  if (capture_state == CAM_STATE_WARMUP) {
+    // Merge any on-demand triggers that arrive during warmup
+    if (force_capture.exchange(false)) {
+      Serial.println("[CAMERA] Additional capture trigger merged (warmup already active)");
+    }
+
+    // Non-blocking wait for 3000ms
+    if (now - warmup_start_ms < LIGHT_WARMUP_MS) {
+      return; // Yield back to main loop to process MQTT, sensors, safety failsafes
+    }
+
+    // 3 seconds elapsed: capture frame
+    Serial.println("[CAMERA] Light warmup complete (3s). Acquiring camera frame...");
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
       Serial.println("[CAMERA WARN] Frame acquisition returned NULL, retrying in 50ms...");
       delay(50);
       fb = esp_camera_fb_get();
     }
+
+    // Immediately turn light OFF! Never keep light on during HTTPS upload or on error.
+    set_relay(6, false);
+    Serial.println("[CAMERA] Light OFF (Relay 6).");
+    capture_state = CAM_STATE_IDLE;
 
     if (!fb) {
       Serial.println("[CAMERA ERR] Frame capture returned NULL after retry!");

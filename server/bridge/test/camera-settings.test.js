@@ -21,6 +21,7 @@ test('camera policy defaults off and validates all fields before writing/publish
   const {controller:c,mqtt,stateFile}=fixture(t);
   assert.equal(c.acceptsPhotos(),false);
   assert.equal(c.getState().settings.auto_enabled,false);
+  assert.equal(c.getState().settings.interval_seconds,3600);
   for(const invalid of [null,[],{}, {...enabled,interval_seconds:0},{...enabled,interval_seconds:90},
     {...enabled,interval_seconds:86460},{...enabled,interval_seconds:'600'},
     {...enabled,auto_enabled:'false'},{...enabled,reception_enabled:false},{...enabled,request_id:'spoof'}]){

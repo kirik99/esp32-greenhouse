@@ -128,9 +128,10 @@ test('REST relay control enforces authorisation and the shared safety checks', a
     assert.equal(heater.status, 409);
     assert.match(heater.json.error, /SENSOR_FAIL|запрещено/);
 
-    // 6. Humidifier ON is refused as well (no valid humidity data)
+    // 6. Humidifier ON is allowed even when telemetry is missing
     const humidifier = await post({ relay: 1, state: true });
-    assert.equal(humidifier.status, 409);
+    assert.equal(humidifier.status, 200);
+    assert.deepEqual(humidifier.json, { success: true, relay: 1, state: true });
 
     // 7. Sensor-independent equipment still works, and OFF is always accepted
     const fanOn = await post({ relay: 5, state: true });

@@ -4,7 +4,7 @@
 // Independent of Arduino so timing (including millis() rollover) is host-testable.
 struct CameraSchedule {
   bool enabled = false;
-  uint32_t interval_seconds = 600;
+  uint32_t interval_seconds = 3600;
   uint32_t last_capture_ms = 0;
   void apply(bool enabled_value, uint32_t seconds, uint32_t now) {
     enabled = enabled_value;

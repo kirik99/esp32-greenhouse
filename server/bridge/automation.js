@@ -133,6 +133,7 @@ class ClimateController {
     this.HEATER_FAN_POST_PURGE_MS = 45000;// 45s fan cooldown after heater turns off
     this.MAX_PURGE_DURATION_MS = 300000;  // 5 minutes max continuous ventilation
     this.PURGE_COOLDOWN_MS = 120000;      // 2 minutes cooldown if max purge exceeded
+    this.MAX_HUMIDIFIER_RUNTIME_MS = 900000; // 15 minutes max continuous humidifier runtime
 
     // Internal state trackers
     this.mode = 'fruiting'; // Default mode
@@ -142,6 +143,7 @@ class ClimateController {
 
     this.heaterOffTime = 0;
     this.exhaustFanOffTime = 0;
+    this.humidifierOnTime = 0;
     this.purgeStartTime = 0;
     this.purgeCooldownUntil = 0;
     this.isPurgingCo2 = false;
@@ -350,6 +352,10 @@ class ClimateController {
       if (safetyHumidifierCutoff && this.currentRelays[0]) {
         this.requestRelay(1, false, true); // Force Humidifier OFF immediately
       }
+      if (this.currentRelays[0] && this.humidifierOnTime > 0 && (now - this.humidifierOnTime >= this.MAX_HUMIDIFIER_RUNTIME_MS)) {
+        console.warn(`[Climate] Humidifier exceeded max runtime (${this.MAX_HUMIDIFIER_RUNTIME_MS / 60000}m) in manual mode - safety turn off`);
+        this.requestRelay(1, false, true);
+      }
       this.substate = this.safetyAlert ? `MANUAL (${this.safetyAlert})` : 'MANUAL';
       return;
     }
@@ -467,12 +473,20 @@ class ClimateController {
       if (mistLockRemaining > 0 && !isExhaustRunning) {
         activeSubstates.push(`Блокировка тумана (${Math.ceil(mistLockRemaining / 1000)}с)`);
       }
-    } else if (s.humidity !== null && s.humidity > 0) {
+    } else if (!isValidReading(s.humidity)) {
+      humidifierDesired = false;
+      activeSubstates.push('Влажность: датчик недоступен');
+    } else {
       if (s.humidity < profile.humOn) {
         humidifierDesired = true;
       } else if (s.humidity >= profile.humOff) {
         humidifierDesired = false;
       }
+    }
+
+    if (humidifierDesired && this.currentRelays[0] && this.humidifierOnTime > 0 && (now - this.humidifierOnTime >= this.MAX_HUMIDIFIER_RUNTIME_MS)) {
+      console.warn(`[Climate] Humidifier exceeded max runtime (${this.MAX_HUMIDIFIER_RUNTIME_MS / 60000}m) - safety turn off`);
+      humidifierDesired = false;
     }
 
     desired[0] = humidifierDesired;
@@ -508,9 +522,10 @@ class ClimateController {
 
       if (targetState !== currentState) {
         const timeSinceToggle = now - this.lastRelayToggleTime[i];
+        const isHumidifierOverrun = relayId === 1 && this.humidifierOnTime > 0 && (now - this.humidifierOnTime >= this.MAX_HUMIDIFIER_RUNTIME_MS);
         const isEmergencyOff = (!targetState && (
           (relayId === 2 && safetyHeaterCutoff) ||
-          (relayId === 1 && safetyHumidifierCutoff)
+          (relayId === 1 && (safetyHumidifierCutoff || isHumidifierOverrun))
         ));
 
         // Allow immediate toggle if emergency OFF, else enforce ANTI_CHATTER
@@ -528,7 +543,14 @@ class ClimateController {
     const idx = relayId - 1;
     const now = Date.now();
 
-    // Record special turn-off events
+    // Record special turn-off / turn-on events
+    if (relayId === 1) {
+      if (state === true && !this.currentRelays[0]) {
+        this.humidifierOnTime = now;
+      } else if (state === false) {
+        this.humidifierOnTime = 0;
+      }
+    }
     if (relayId === 2 && this.currentRelays[1] === true && state === false) {
       this.heaterOffTime = now;
     }
@@ -595,12 +617,6 @@ class ClimateController {
     if (id === 1) {
       if (flags.humidifierCutoff) {
         return { ok: false, kind: 'blocked', error: 'Включение увлажнителя заблокировано защитой: OVERHUMIDITY (≥ 98 %)' };
-      }
-      if (!isValidReading(this.lastSensors.humidity)) {
-        return { ok: false, kind: 'blocked', error: 'Нет валидных данных датчика влажности — включение увлажнителя запрещено' };
-      }
-      if (!this.sensorsAreFresh()) {
-        return { ok: false, kind: 'blocked', error: `Данные датчиков устарели (${Math.round((Date.now() - this.lastSensors.updated_at) / 1000)} с) — включение увлажнителя запрещено` };
       }
     }
 

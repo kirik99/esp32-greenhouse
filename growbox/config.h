@@ -37,7 +37,7 @@
 // Intervals (ms)
 #define SENSOR_INTERVAL 30000
 #define STATUS_INTERVAL 30000
-#define CAMERA_INTERVAL 600000
+#define CAMERA_INTERVAL 3600000
 
 // Frozen-reading detection ("values stop changing but look plausible").
 // BME280: three byte-identical T/H/P readings in a row can only mean the chip is

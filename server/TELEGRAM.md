@@ -34,10 +34,10 @@ with this one. Bot failures do not disable the bridge or HTTPS photo endpoint.
 - /mode [id], /relay <1-6> <on|off>, /stats [hours], /notify on|off, /help.
 
 REST and Telegram share the same manual relay guards. With BME disabled,
-humidifier ON is refused because humidity is unavailable; manual heater ON also
-requires the air-temperature channel. In incubation the heater is guarded by
-substrate temperature. OFF is never blocked by sensor guards. These checks do
-not prove physical relay actuation or replace hardware cutoffs.
+manual humidifier ON is permitted (protected by a 15-minute runtime safety timeout and
+OVERHUMIDITY cutoff); manual heater ON requires the air-temperature channel. In incubation
+the heater is guarded by substrate temperature. OFF is never blocked by sensor guards. These checks
+do not prove physical relay actuation or replace hardware cutoffs.
 
 ## Upgrade without losing the active mode
 
