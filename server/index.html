@@ -1232,6 +1232,15 @@
       const file = event.target.files[0];
       const statusEl = document.getElementById('otaBinUploadStatus');
       if (!file) return;
+
+      // Immediately reset any previous manifest and disable update button
+      otaManifest = null;
+      renderOta();
+      const selectionEl = document.getElementById('otaSelection');
+      if (selectionEl) selectionEl.textContent = 'Файл не выбран.';
+      const manifestInput = document.getElementById('otaManifest');
+      if (manifestInput) manifestInput.value = '';
+
       if (!file.name.endsWith('.bin')) {
         statusEl.textContent = 'Ошибка: выберите скомпилированный файл .bin!';
         statusEl.className = 'text-[11px] text-rose-400 mt-1';
