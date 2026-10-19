@@ -29,6 +29,7 @@ enum CameraCaptureState {
 static CameraCaptureState capture_state = CAM_STATE_IDLE;
 static unsigned long warmup_start_ms = 0;
 static const unsigned long LIGHT_WARMUP_MS = 3000;
+static bool light_was_on_before_capture = false;
 
 static std::atomic<bool> upload_in_progress{false};
 bool camera_upload_busy() { return upload_in_progress.load(); }
@@ -40,16 +41,17 @@ static void upload_photo_task(void *arg) {
   bool ok = false;
   esp_http_client_handle_t client = nullptr;
   if (WiFi.status() == WL_CONNECTED) {
-    if (time(nullptr) < 1704067200) {
+    bool is_https = strncmp(IMAGE_UPLOAD_URL, "https://", 8) == 0;
+    if (is_https && time(nullptr) < 1704067200) {
       configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
       unsigned long start = millis();
       while (time(nullptr) < 1704067200 && millis() - start < 10000) delay(100);
     }
-    if (time(nullptr) >= 1704067200) {
+    if (!is_https || time(nullptr) >= 1704067200) {
       esp_http_client_config_t cfg = {};
       cfg.url = IMAGE_UPLOAD_URL;
       cfg.method = HTTP_METHOD_POST;
-      cfg.crt_bundle_attach = esp_crt_bundle_attach;
+      if (is_https) cfg.crt_bundle_attach = esp_crt_bundle_attach;
       cfg.timeout_ms = 5000;
       cfg.buffer_size = 4096;
       cfg.buffer_size_tx = 4096;
@@ -108,8 +110,9 @@ bool is_camera_available() {
 }
 
 void setup_camera() {
-  if (strncmp(IMAGE_UPLOAD_URL, "https://", 8) != 0 || strlen(IMAGE_UPLOAD_TOKEN) < 32) {
-    Serial.println("[CAMERA HTTPS] Configure IMAGE_UPLOAD_URL and a 32+ character IMAGE_UPLOAD_TOKEN in wifi_config.h");
+  bool url_ok = (strncmp(IMAGE_UPLOAD_URL, "https://", 8) == 0 || strncmp(IMAGE_UPLOAD_URL, "http://", 7) == 0);
+  if (!url_ok || strlen(IMAGE_UPLOAD_TOKEN) < 32) {
+    Serial.println("[CAMERA] Configure valid HTTP/HTTPS IMAGE_UPLOAD_URL and a 32+ character IMAGE_UPLOAD_TOKEN in wifi_config.h");
   }
   Serial.printf("[CAMERA] psramFound: %d, free_psram: %u, free_heap: %u\n", 
                 psramFound(), (unsigned int)ESP.getFreePsram(), (unsigned int)ESP.getFreeHeap());
@@ -187,12 +190,17 @@ void setup_camera() {
 }
 
 void process_camera() {
-  // Safety / abort conditions: ensure Relay 6 is turned OFF if warmup was in progress
+  bool url_ok = (strncmp(IMAGE_UPLOAD_URL, "https://", 8) == 0 || strncmp(IMAGE_UPLOAD_URL, "http://", 7) == 0);
+  // Safety / abort conditions: ensure Relay 6 is restored if warmup was in progress
   if (ota_busy() || !camera_ready || WiFi.status() != WL_CONNECTED ||
-      strncmp(IMAGE_UPLOAD_URL, "https://", 8) != 0 || strlen(IMAGE_UPLOAD_TOKEN) < 32) {
+      !url_ok || strlen(IMAGE_UPLOAD_TOKEN) < 32) {
     if (capture_state == CAM_STATE_WARMUP) {
-      set_relay(6, false);
-      Serial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light OFF.");
+      if (!light_was_on_before_capture) {
+        set_relay(6, false);
+        Serial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light OFF.");
+      } else {
+        Serial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light kept ON (was active before capture).");
+      }
       capture_state = CAM_STATE_IDLE;
     }
     return;
@@ -200,7 +208,9 @@ void process_camera() {
 
   if (upload_in_progress.load()) {
     if (capture_state == CAM_STATE_WARMUP) {
-      set_relay(6, false);
+      if (!light_was_on_before_capture) {
+        set_relay(6, false);
+      }
       capture_state = CAM_STATE_IDLE;
     }
     return;
@@ -212,9 +222,13 @@ void process_camera() {
     bool auto_due = camera_auto_capture_due(now);
     bool force_due = force_capture.exchange(false);
     if (auto_due || force_due) {
-      Serial.printf("[CAMERA] Triggering capture sequence (%s). Turning light ON (Relay 6), 3s warmup...\n",
-                    force_due ? "on-demand" : "scheduled");
-      set_relay(6, true);
+      light_was_on_before_capture = get_relay(6);
+      Serial.printf("[CAMERA] Triggering capture sequence (%s). Initial light state: %s. Turning light ON (Relay 6), 3s warmup...\n",
+                    force_due ? "on-demand" : "scheduled",
+                    light_was_on_before_capture ? "ALREADY ON" : "OFF");
+      if (!light_was_on_before_capture) {
+        set_relay(6, true);
+      }
       warmup_start_ms = now;
       capture_state = CAM_STATE_WARMUP;
     }
@@ -241,9 +255,14 @@ void process_camera() {
       fb = esp_camera_fb_get();
     }
 
-    // Immediately turn light OFF! Never keep light on during HTTPS upload or on error.
-    set_relay(6, false);
-    Serial.println("[CAMERA] Light OFF (Relay 6).");
+    // Restore light state: if light was already ON by schedule/stage/manual, leave it ON!
+    // Only turn it OFF if it was turned ON exclusively for the camera shot.
+    if (!light_was_on_before_capture) {
+      set_relay(6, false);
+      Serial.println("[CAMERA] Light OFF (Relay 6) - returned to previous OFF state.");
+    } else {
+      Serial.println("[CAMERA] Light kept ON (Relay 6) - growth stage / schedule active.");
+    }
     capture_state = CAM_STATE_IDLE;
 
     if (!fb) {
