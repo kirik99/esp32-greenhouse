@@ -68,6 +68,8 @@ services:
       - CLIMATE_STATE_FILE=/app/state/climate_state.json
       - CAMERA_SETTINGS_FILE=/app/state/camera_settings.json
       - OTA_SIGNING_PUBLIC_KEY=${OTA_SIGNING_PUBLIC_KEY:-}
+      - OTA_SIGNING_PRIVATE_KEY=${OTA_SIGNING_PRIVATE_KEY:-}
+      - OTA_FIRMWARE_BASE_URL=${OTA_FIRMWARE_BASE_URL:-}
       - OTA_DOWNLOAD_TOKEN=${OTA_DOWNLOAD_TOKEN:-}
       - OTA_ARTIFACT_DIR=/app/firmware
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
@@ -79,7 +81,7 @@ services:
     volumes:
       - ./bridge/images:/app/images
       - ./bridge/state:/app/state
-      - ./bridge/firmware:/app/firmware:ro
+      - ./bridge/firmware:/app/firmware
     depends_on:
       - mosquitto
       - influxdb

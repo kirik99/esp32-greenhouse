@@ -316,7 +316,14 @@ setInterval(() => {
 
 // Express App setup
 const app = express();
-require('./ota-download').installFirmwareDownload(app, {directory:process.env.OTA_ARTIFACT_DIR,token:process.env.OTA_DOWNLOAD_TOKEN});
+require('./ota-download').installFirmwareDownload(app, {
+  directory: process.env.OTA_ARTIFACT_DIR,
+  token: process.env.OTA_DOWNLOAD_TOKEN,
+  requireAuth,
+  ota,
+  privateKey: process.env.OTA_SIGNING_PRIVATE_KEY || '',
+  baseUrl: process.env.OTA_FIRMWARE_BASE_URL || ''
+});
 installImageUpload(app, {
   imagesDir: IMAGES_DIR,
   token: process.env.IMAGE_UPLOAD_TOKEN,
