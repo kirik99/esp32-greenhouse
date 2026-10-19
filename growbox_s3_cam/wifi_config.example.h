@@ -14,7 +14,6 @@
 #define IMAGE_UPLOAD_TOKEN ""
 // OTA is opt-in. Requires an OTA partition table AND rollback-enabled bootloader.
 #define OTA_ENABLED false
-#define FIRMWARE_BUILD_NUMBER 1
 // RSA-2048 PUBLIC key only; never include the private signing key in firmware.
 #define OTA_PUBLIC_KEY_PEM ""
 #define OTA_FIRMWARE_BASE_URL "https://growbox.weird.cyou/api/ota/firmware/"
