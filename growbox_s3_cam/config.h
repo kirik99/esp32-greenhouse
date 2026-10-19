@@ -57,6 +57,7 @@
 #define SENSOR_INTERVAL 10000   // 10s for responsive local monitoring
 #define STATUS_INTERVAL 10000   // 10s
 #define CAMERA_DEFAULT_INTERVAL_SECONDS 3600 // 1 hour (3600s); server-controlled; auto capture defaults OFF.
+#define FIRMWARE_BUILD_NUMBER 2
 
 // Frozen-reading detection
 #define BME_STALE_CYCLES 3

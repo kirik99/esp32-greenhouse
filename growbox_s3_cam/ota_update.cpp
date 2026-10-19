@@ -1,4 +1,5 @@
 #include "ota_update.h"
+#include "config.h"
 #include "wifi_config.h"
 #include "relay.h"
 #include "camera_capture.h"
