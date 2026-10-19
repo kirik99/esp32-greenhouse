@@ -536,7 +536,6 @@ app.get('/health', (req, res) => {
 
 // Ручка для принудительного снимка с камеры (требует авторизации)
 app.post('/api/capture', requireAuth, (req, res) => {
-  if (!cameraSettings.acceptsPhotos()) return res.status(409).json({ error: 'Приём фото отключён в настройках камеры' });
   mqttClient.publish('growbox/camera/capture', '1');
   console.log(`[${new Date().toISOString()}] Triggered on-demand camera capture via /api/capture`);
   res.json({ status: 'capture_triggered' });

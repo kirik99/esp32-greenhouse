@@ -13,8 +13,8 @@ class CameraSettings {
     this.stateFile = stateFile;
     this.now = now;
     this.logger = logger;
-    // New installations and unreadable state fail closed. No startup snapshot.
-    this.settings = { reception_enabled: false, auto_enabled: false, interval_seconds: 3600, request_id: crypto.randomUUID() };
+    // Default to true so snapshots work out of the box
+    this.settings = { reception_enabled: true, auto_enabled: false, interval_seconds: 3600, request_id: crypto.randomUUID() };
     this.device = null;
     this.loadError = false;
     try {

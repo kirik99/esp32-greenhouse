@@ -943,7 +943,7 @@
         const btn = document.getElementById('btnSnap');
         const text = document.getElementById('btnSnapText');
         btn.disabled = true;
-        text.innerText = 'Захват кадра...';
+        text.innerText = 'Запрос съёмки...';
 
         fetch(apiBase + '/api/capture', {
           method: 'POST',
@@ -953,16 +953,30 @@
         })
         .then(async r => {
           const data = await r.json();
-          if (!r.ok) throw new Error(data.error || 'HTTP '+r.status);
+          if (!r.ok) throw new Error(data.error || 'HTTP ' + r.status);
+          let remaining = 6;
+          text.innerText = `Съёмка и прогрев... (${remaining}с)`;
+          const timer = setInterval(() => {
+            remaining--;
+            if (remaining > 0) {
+              text.innerText = `Съёмка и прогрев... (${remaining}с)`;
+            } else {
+              clearInterval(timer);
+              btn.disabled = false;
+              text.innerText = 'Сделать снимок сейчас';
+            }
+          }, 1000);
           setTimeout(loadLatestImage, 4000);
-          setTimeout(loadLatestImage, 8000);
+          setTimeout(loadLatestImage, 7000);
+          setTimeout(loadLatestImage, 10000);
         })
         .catch((err) => {
-          document.getElementById('cameraSettingsStatus').textContent = 'Снимок не запрошен: '+err.message;
-        })
-        .finally(() => {
           btn.disabled = false;
-          text.innerText = 'Сделать снимок сейчас';
+          text.innerText = 'Ошибка: ' + err.message;
+          document.getElementById('cameraSettingsStatus').textContent = 'Снимок не запрошен: ' + err.message;
+          setTimeout(() => {
+            text.innerText = 'Сделать снимок сейчас';
+          }, 4000);
         });
       });
     }
