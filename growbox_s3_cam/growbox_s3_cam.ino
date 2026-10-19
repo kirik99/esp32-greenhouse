@@ -70,14 +70,16 @@ bool setup_wifi() {
 }
 
 void setup() {
+  // CRITICAL: Initialize relays to HIGH (OFF) immediately on power-on
+  setup_relays();
+
   Serial.begin(115200);
-  delay(1500);
+  delay(1000);
 
   logMsg("\n========================================");
   logMsg("   GROWBOX S3 CAM FIRMWARE STARTING");
   logMsg("========================================");
 
-  setup_relays();
   setup_ota();
   setup_sensors();
   setup_wifi();

@@ -12,6 +12,7 @@ static portMUX_TYPE relay_mux = portMUX_INITIALIZER_UNLOCKED;
 
 void setup_relays() {
   for (int i = 0; i < NUM_RELAYS; i++) {
+    digitalWrite(relay_pins[i], HIGH); // Pre-set output latch to HIGH before pinMode
     pinMode(relay_pins[i], OUTPUT);
     digitalWrite(relay_pins[i], HIGH); // LOW-active: HIGH is OFF (safe default)
     relay_states[i] = false;

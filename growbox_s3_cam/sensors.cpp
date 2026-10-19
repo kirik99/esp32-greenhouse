@@ -293,9 +293,10 @@ static float ds18b20_read_temp_c(int pin) {
 // ---------------------------------------------------------------------------
 
 void setup_sensors() {
-  BmeInitResult bme_result = autodetect_bme280();
-  sensor_bme_ok = (bme_result == BME_INIT_OK);
-  sensor_bme_status = bme_init_status(bme_result);
+  // BME280 disabled per user request
+  sensor_bme_ok = false;
+  sensor_bme_status = "DISABLED";
+  Serial.println("[SENSORS] BME280 disabled by configuration.");
 
   current_ds_pin = PIN_DS18B20;
   pinMode(current_ds_pin, INPUT_PULLUP);
@@ -445,74 +446,12 @@ static void bme_recover_bus() {
 void read_sensors() {
   String diag = "";
 
-  // 1. BME280 (air temperature / humidity / pressure)
-  if (!sensor_bme_ok) {
-    BmeInitResult result = autodetect_bme280();
-    if (result == BME_INIT_OK) {
-      sensor_bme_ok = true;
-      sensor_bme_status = "OK";
-      Serial.println("[SENSORS] BME280 detected on retry!");
-    } else {
-      sensor_bme_status = bme_init_status(result);
-    }
-  }
-
-  if (sensor_bme_ok) {
-    float t = bme.readTemperature();
-    float h = bme.readHumidity();
-    float p = bme.readPressure() / 100.0F;
-
-    if (!valid_temp(t) || !valid_hum(h) || !valid_pres(p)) {
-      delay(50);
-      t = bme.readTemperature();
-      h = bme.readHumidity();
-      p = bme.readPressure() / 100.0F;
-    }
-
-    const bool t_ok = valid_temp(t);
-    const bool h_ok = t_ok && valid_hum(h);
-    const bool p_ok = t_ok && valid_pres(p);
-    const bool any_ok = t_ok && (h_ok || p_ok);
-
-    const bool frozen = false;
-    if (t_ok && h_ok && p_ok) {
-      last_bme_t = t;
-      last_bme_h = h;
-      last_bme_p = p;
-      bme_has_last = true;
-      bme_fail_streak = 0;
-    }
-    bme_same_streak = 0;
-
-    if (!any_ok) {
-      current_air_temp = -999.0;
-      current_humidity = -999.0;
-      current_pressure = -999.0;
-      bme_fail_streak++;
-      sensor_bme_status = "READ_ERROR";
-      Serial.printf("[SENSORS WARN] BME280 read failed (streak %d): T=%.2f H=%.2f P=%.2f\n",
-                    bme_fail_streak, t, h, p);
-      diag += "BME:read_error(x" + String(bme_fail_streak) + "); ";
-      if (bme_fail_streak >= 5) {
-        bme_recover_bus();
-      }
-    } else {
-      // Validate every channel on its own: a single bad channel (NAN humidity on a
-      // BMP280-style clone, or one glitched I2C burst) must not wipe the good ones.
-      current_air_temp = t_ok ? t : -999.0;
-      current_humidity = h_ok ? h : -999.0;
-      current_pressure = p_ok ? p : -999.0;
-      bme_fail_streak = 0;
-      sensor_bme_status = h_ok ? "OK" : "OK_NO_HUMIDITY";
-      diag += "BME:" + hexByte(bme_addr) + (h_ok ? " OK; " : " OK(no humidity); ");
-    }
-  } else {
-    current_air_temp = -999.0;
-    current_humidity = -999.0;
-    current_pressure = -999.0;
-    diag += "BME:not_found(i2c=" + i2c_devices + "@" + String(i2c_sda_active) + "/" +
-            String(i2c_scl_active) + "); ";
-  }
+  // 1. BME280: DISABLED completely per user request
+  current_air_temp = -999.0f;
+  current_humidity = -999.0f;
+  current_pressure = -999.0f;
+  sensor_bme_ok = false;
+  sensor_bme_status = "DISABLED";
 
   // 2. DS18B20 (substrate temperature)
   pinMode(current_ds_pin, INPUT_PULLUP);

@@ -954,7 +954,8 @@
         .then(async r => {
           const data = await r.json();
           if (!r.ok) throw new Error(data.error || 'HTTP '+r.status);
-          setTimeout(loadLatestImage, 3500);
+          setTimeout(loadLatestImage, 4000);
+          setTimeout(loadLatestImage, 8000);
         })
         .catch((err) => {
           document.getElementById('cameraSettingsStatus').textContent = 'Снимок не запрошен: '+err.message;
