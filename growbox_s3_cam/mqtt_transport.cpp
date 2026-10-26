@@ -340,13 +340,14 @@ void mqtt_publish_sensors() {
   // Per-channel validity. Values are still sent as the -999 sentinel for backward
   // compatibility, but the dashboard can now tell "sensor offline" from a real
   // reading and show why.
-  doc["air_temp_ok"] = sensor_bme_ok && (current_air_temp != -999.0);
-  doc["humidity_ok"] = sensor_bme_ok && (current_humidity != -999.0);
-  doc["pressure_ok"] = sensor_bme_ok && (current_pressure != -999.0);
+  doc["air_temp_ok"] = sensor_sht_ok && (current_air_temp != -999.0);
+  doc["humidity_ok"] = sensor_sht_ok && (current_humidity != -999.0);
+  doc["pressure_ok"] = false;
   doc["substrate_temp_ok"] = (current_substrate_temp != -999.0);
   doc["co2_ok"] = (current_co2_ppm != -999);
 
-  doc["bme_status"] = sensor_bme_status;
+  doc["bme_status"] = sensor_sht_status;
+  doc["sht_status"] = sensor_sht_status;
   doc["ds_status"] = sensor_ds_status;
   doc["co2_status"] = sensor_co2_status;
   doc["i2c_devices"] = i2c_devices;

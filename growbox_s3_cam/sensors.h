@@ -16,10 +16,17 @@ extern int current_co2_ppm;
 extern String current_alarm;
 extern String sensor_diag;
 
+// Air sensor (SHT30, replaces BME280)
+extern bool sensor_sht_ok;
+extern String sensor_sht_status;
+extern uint8_t sht_i2c_addr;
+
+// Backward-compatibility aliases
 extern bool sensor_bme_ok;
+extern String sensor_bme_status;
+
 extern bool sensor_ds_ok;
 extern bool sensor_co2_ok;
-extern String sensor_bme_status;
 extern String sensor_ds_status;
 extern String sensor_co2_status;
 extern String i2c_devices;

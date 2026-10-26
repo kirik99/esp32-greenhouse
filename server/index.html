@@ -508,6 +508,8 @@
           return ' — сенсор отвечает, но отдаёт служебное значение: проверьте питание VIN = 5 В и дайте прогреться ~3 минуты';
         case 'MEASURE_TRIGGER_FAILED':
           return ' — не удалось запустить измерение, проверьте контакт STEMMA QT';
+        case 'NOT_FOUND':
+          return ' — сенсор не найден на шине I²C (проверьте 3.3 В, GND, SDA=GPIO1, SCL=GPIO2)';
         case 'READ_ERROR':
           return ' — сбои чтения по I²C, проверьте кабель и подтяжки';
         case 'WRONG_CHIP_ID':
@@ -530,13 +532,18 @@
       const problems = [];
       const warnings = [];
 
-      if (!isOk(d.air_temp_ok, d.air_temp) || !isOk(d.humidity_ok, d.humidity) || !isOk(d.pressure_ok, d.pressure)) {
-        problems.push('BME280 (воздух/влажность/давление): ' + esc(d.bme_status || 'нет данных') +
-          sensorHint(d.bme_status) +
+      const isSht = !!d.sht_status || d.pressure_ok === false;
+      const airOk = isOk(d.air_temp_ok, d.air_temp) && isOk(d.humidity_ok, d.humidity) && (isSht ? true : isOk(d.pressure_ok, d.pressure));
+      const airSensorName = isSht ? 'SHT30 (воздух/влажность)' : 'BME280 (воздух/влажность/давление)';
+      const airStatus = d.sht_status || d.bme_status || 'нет данных';
+
+      if (!airOk) {
+        problems.push(airSensorName + ': ' + esc(airStatus) +
+          sensorHint(airStatus) +
           ' • шина I²C: ' + esc(d.i2c_devices || '?') +
           (d.i2c_sda !== undefined ? ' (SDA=' + esc(d.i2c_sda) + ', SCL=' + esc(d.i2c_scl) + ')' : ''));
-      } else if (d.bme_status && d.bme_status !== 'OK') {
-        warnings.push('BME280: ' + esc(d.bme_status) + sensorHint(d.bme_status));
+      } else if (airStatus !== 'OK' && airStatus !== 'INIT') {
+        warnings.push(airSensorName + ': ' + esc(airStatus) + sensorHint(airStatus));
       }
 
       if (!isOk(d.substrate_temp_ok, d.substrate_temp)) {

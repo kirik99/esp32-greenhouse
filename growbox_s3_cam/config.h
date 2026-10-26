@@ -5,12 +5,14 @@
 // HZAD ESP32-S3 WROOM N16R8 CAM Pinout & Hardware Configuration
 // =========================================================================
 
-// --- 1. I2C Sensors (BME280) ---
+// --- 1. I2C Air Temperature & Humidity Sensor (SHT30 / SHT3x) ---
 // Confirmed on physical device: SDA=GPIO 1, SCL=GPIO 2
 #define PIN_SDA 1
 #define PIN_SCL 2
 
-#define I2C_FALLBACK_ENABLED 0
+#define I2C_FALLBACK_ENABLED 1
+#define SHT30_I2C_ADDR_DEFAULT 0x44
+#define SHT30_I2C_ADDR_ALT     0x45
 
 // --- 2. Substrate Temperature Sensor (DS18B20 OneWire) ---
 // Assigned to free breakout header GPIO 41 (4.7k pullup to 3.3V)
@@ -57,10 +59,10 @@
 #define SENSOR_INTERVAL 10000   // 10s for responsive local monitoring
 #define STATUS_INTERVAL 10000   // 10s
 #define CAMERA_DEFAULT_INTERVAL_SECONDS 3600 // 1 hour (3600s); server-controlled; auto capture defaults OFF.
-#define FIRMWARE_BUILD_NUMBER 3
+#define FIRMWARE_BUILD_NUMBER 4
 
 // Frozen-reading detection
-#define BME_STALE_CYCLES 3
+#define SHT_STALE_CYCLES 3
 #define CO2_STALE_CYCLES 3
 #define CO2_SUSPICIOUS_PPM 5000
 
