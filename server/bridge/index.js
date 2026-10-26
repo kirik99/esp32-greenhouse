@@ -542,6 +542,8 @@ app.post('/api/capture', requireAuth, (req, res) => {
   res.json({ status: 'capture_triggered' });
 });
 
+require('./photo-export').installPhotoExport(app, { imagesDir: IMAGES_DIR, requireAuth });
+
 app.get('/api/images', requireTelemetryAuth, (req, res) => {
   fs.readdir(IMAGES_DIR, (err, files) => {
     if (err) {

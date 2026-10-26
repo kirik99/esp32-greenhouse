@@ -9,11 +9,15 @@
   },
   "dependencies": {
     "@influxdata/influxdb-client": "^1.33.2",
+    "archiver": "^8.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jpeg-js": "^0.4.4",
     "mqtt": "^5.10.1",
     "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "yauzl": "^3.4.0"
   }
 }
