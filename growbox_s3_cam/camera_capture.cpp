@@ -1,10 +1,12 @@
 #include "camera_capture.h"
+#include "diagnostics.h"
 #include "mqtt_transport.h"
 #include "config.h"
 #include "esp_camera.h"
 #include "wifi_config.h"
 #include <WiFi.h>
 #include <time.h>
+#include <errno.h>
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include <atomic>
@@ -61,47 +63,53 @@ static void upload_photo_task(void *arg) {
         esp_http_client_set_header(client, "Content-Type", "image/jpeg");
         esp_http_client_set_header(client, "X-Upload-Token", IMAGE_UPLOAD_TOKEN);
         unsigned long start = millis();
+        DiagnosticSerial.printf("[CAMERA HTTPS] Opening connection: jpeg=%u bytes, free_heap=%u, rssi=%d\n",
+                                static_cast<unsigned>(fb->len), ESP.getFreeHeap(), WiFi.RSSI());
         esp_err_t err = esp_http_client_open(client, static_cast<int>(fb->len));
+        if (err != ESP_OK) DiagnosticSerial.printf("[CAMERA HTTPS] Open failed: %s (0x%x), errno=%d\n", esp_err_to_name(err), err, errno);
         size_t sent = 0;
         while (err == ESP_OK && sent < fb->len && millis() - start < 30000) {
           size_t chunk = fb->len - sent;
           if (chunk > 4096) chunk = 4096;
           int n = esp_http_client_write(client, reinterpret_cast<const char *>(fb->buf + sent), chunk);
-          if (n <= 0) break;
+          if (n <= 0) {
+            DiagnosticSerial.printf("[CAMERA HTTPS] Write failed: result=%d errno=%d elapsed_ms=%lu\n", n, errno, millis() - start);
+            break;
+          }
           sent += n;
           vTaskDelay(1);
         }
         if (sent == fb->len && esp_http_client_fetch_headers(client) >= 0) {
           int status = esp_http_client_get_status_code(client);
           ok = status == 201;
-          Serial.printf("[CAMERA HTTPS] HTTP %d, sent %u bytes\n", status, static_cast<unsigned>(sent));
+          DiagnosticSerial.printf("[CAMERA HTTPS] HTTP %d, sent %u bytes\n", status, static_cast<unsigned>(sent));
         } else {
-          Serial.printf("[CAMERA HTTPS] Transfer failed: %s, sent %u/%u bytes\n",
+          DiagnosticSerial.printf("[CAMERA HTTPS] Transfer failed: %s, sent %u/%u bytes\n",
                         esp_err_to_name(err), static_cast<unsigned>(sent), static_cast<unsigned>(fb->len));
         }
       }
-    } else Serial.println("[CAMERA HTTPS] No valid clock: TLS upload skipped");
+    } else DiagnosticSerial.println("[CAMERA HTTPS] No valid clock: TLS upload skipped");
   }
   if (client) {
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
   }
   esp_camera_fb_return(fb);
-  Serial.println(ok ? "[CAMERA HTTPS] Photo uploaded" : "[CAMERA HTTPS] Upload failed; next scheduled capture will retry");
+  DiagnosticSerial.println(ok ? "[CAMERA HTTPS] Photo uploaded" : "[CAMERA HTTPS] Upload failed; next scheduled capture will retry");
   upload_in_progress.store(false);
   vTaskDelete(nullptr);
 }
 
 void trigger_camera_capture() {
   if (upload_in_progress.load()) {
-    Serial.println("[CAMERA] Capture request ignored: upload already in progress");
+    DiagnosticSerial.println("[CAMERA] Capture request ignored: upload already in progress");
     return;
   }
   if (capture_state == CAM_STATE_WARMUP) {
-    Serial.println("[CAMERA] Capture request received while already warming up light; request merged");
+    DiagnosticSerial.println("[CAMERA] Capture request received while already warming up light; request merged");
     return;
   }
-  Serial.println("[CAMERA] Manual snapshot capture triggered via MQTT!");
+  DiagnosticSerial.println("[CAMERA] Manual snapshot capture triggered via MQTT!");
   force_capture = true;
 }
 
@@ -112,9 +120,9 @@ bool is_camera_available() {
 void setup_camera() {
   bool url_ok = (strncmp(IMAGE_UPLOAD_URL, "https://", 8) == 0 || strncmp(IMAGE_UPLOAD_URL, "http://", 7) == 0);
   if (!url_ok || strlen(IMAGE_UPLOAD_TOKEN) < 32) {
-    Serial.println("[CAMERA] Configure valid HTTP/HTTPS IMAGE_UPLOAD_URL and a 32+ character IMAGE_UPLOAD_TOKEN in wifi_config.h");
+    DiagnosticSerial.println("[CAMERA] Configure valid HTTP/HTTPS IMAGE_UPLOAD_URL and a 32+ character IMAGE_UPLOAD_TOKEN in wifi_config.h");
   }
-  Serial.printf("[CAMERA] psramFound: %d, free_psram: %u, free_heap: %u\n", 
+  DiagnosticSerial.printf("[CAMERA] psramFound: %d, free_psram: %u, free_heap: %u\n",
                 psramFound(), (unsigned int)ESP.getFreePsram(), (unsigned int)ESP.getFreeHeap());
 
   camera_config_t config = {};
@@ -154,7 +162,7 @@ void setup_camera() {
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("[CAMERA ERR] esp_camera_init failed: 0x%x (%s)\n", err, esp_err_to_name(err));
+    DiagnosticSerial.printf("[CAMERA ERR] esp_camera_init failed: 0x%x (%s)\n", err, esp_err_to_name(err));
     camera_ready = false;
     return;
   }
@@ -175,7 +183,7 @@ void setup_camera() {
     s->set_wpc(s, 1);            // white pixel correction
     s->set_raw_gma(s, 1);        // gamma correction
     s->set_lenc(s, 1);           // lens distortion correction
-    Serial.println("[CAMERA] Sensor tuned: UXGA 1600x1200, AWB, AEC, Sharpness, BPC/WPC enabled");
+    DiagnosticSerial.println("[CAMERA] Sensor tuned: UXGA 1600x1200, AWB, AEC, Sharpness, BPC/WPC enabled");
   }
 
   // Sensor warmup: discard first 2 frames to let AEC/AWB stabilize
@@ -186,7 +194,7 @@ void setup_camera() {
   }
 
   camera_ready = true;
-  Serial.println("[CAMERA OK] OV2640 DVP camera initialized successfully at UXGA 1600x1200!");
+  DiagnosticSerial.println("[CAMERA OK] OV2640 DVP camera initialized successfully at UXGA 1600x1200!");
 }
 
 void process_camera() {
@@ -197,9 +205,9 @@ void process_camera() {
     if (capture_state == CAM_STATE_WARMUP) {
       if (!light_was_on_before_capture) {
         set_relay(6, false);
-        Serial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light OFF.");
+        DiagnosticSerial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light OFF.");
       } else {
-        Serial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light kept ON (was active before capture).");
+        DiagnosticSerial.println("[CAMERA] Capture warmup cancelled: network/system condition changed. Light kept ON (was active before capture).");
       }
       capture_state = CAM_STATE_IDLE;
     }
@@ -223,7 +231,7 @@ void process_camera() {
     bool force_due = force_capture.exchange(false);
     if (auto_due || force_due) {
       light_was_on_before_capture = get_relay(6);
-      Serial.printf("[CAMERA] Triggering capture sequence (%s). Initial light state: %s. Turning light ON (Relay 6), 3s warmup...\n",
+      DiagnosticSerial.printf("[CAMERA] Triggering capture sequence (%s). Initial light state: %s. Turning light ON (Relay 6), 3s warmup...\n",
                     force_due ? "on-demand" : "scheduled",
                     light_was_on_before_capture ? "ALREADY ON" : "OFF");
       if (!light_was_on_before_capture) {
@@ -238,7 +246,7 @@ void process_camera() {
   if (capture_state == CAM_STATE_WARMUP) {
     // Merge any on-demand triggers that arrive during warmup
     if (force_capture.exchange(false)) {
-      Serial.println("[CAMERA] Additional capture trigger merged (warmup already active)");
+      DiagnosticSerial.println("[CAMERA] Additional capture trigger merged (warmup already active)");
     }
 
     // Non-blocking wait for 3000ms
@@ -247,10 +255,10 @@ void process_camera() {
     }
 
     // 3 seconds elapsed: capture frame
-    Serial.println("[CAMERA] Light warmup complete (3s). Acquiring camera frame...");
+    DiagnosticSerial.println("[CAMERA] Light warmup complete (3s). Acquiring camera frame...");
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
-      Serial.println("[CAMERA WARN] Frame acquisition returned NULL, retrying in 50ms...");
+      DiagnosticSerial.println("[CAMERA WARN] Frame acquisition returned NULL, retrying in 50ms...");
       delay(50);
       fb = esp_camera_fb_get();
     }
@@ -259,24 +267,24 @@ void process_camera() {
     // Only turn it OFF if it was turned ON exclusively for the camera shot.
     if (!light_was_on_before_capture) {
       set_relay(6, false);
-      Serial.println("[CAMERA] Light OFF (Relay 6) - returned to previous OFF state.");
+      DiagnosticSerial.println("[CAMERA] Light OFF (Relay 6) - returned to previous OFF state.");
     } else {
-      Serial.println("[CAMERA] Light kept ON (Relay 6) - growth stage / schedule active.");
+      DiagnosticSerial.println("[CAMERA] Light kept ON (Relay 6) - growth stage / schedule active.");
     }
     capture_state = CAM_STATE_IDLE;
 
     if (!fb) {
-      Serial.println("[CAMERA ERR] Frame capture returned NULL after retry!");
+      DiagnosticSerial.println("[CAMERA ERR] Frame capture returned NULL after retry!");
       return;
     }
 
     camera_capture_started(now);
 
-    Serial.printf("[CAMERA] Captured JPEG: %u bytes (%ux%u). Uploading via HTTPS...\n",
+    DiagnosticSerial.printf("[CAMERA] Captured JPEG: %u bytes (%ux%u). Uploading via HTTPS...\n",
                   (unsigned int)fb->len, (unsigned int)fb->width, (unsigned int)fb->height);
 
     if (fb->len > 1024 * 1024) {
-      Serial.println("[CAMERA HTTPS] Frame exceeds 1 MiB limit");
+      DiagnosticSerial.println("[CAMERA HTTPS] Frame exceeds 1 MiB limit");
       esp_camera_fb_return(fb);
       return;
     }
@@ -284,7 +292,7 @@ void process_camera() {
     if (xTaskCreate(upload_photo_task, "photo_https", 12288, fb, 1, nullptr) != pdPASS) {
       esp_camera_fb_return(fb);
       upload_in_progress.store(false);
-      Serial.println("[CAMERA HTTPS] Could not start upload task");
+      DiagnosticSerial.println("[CAMERA HTTPS] Could not start upload task");
     }
   }
 }

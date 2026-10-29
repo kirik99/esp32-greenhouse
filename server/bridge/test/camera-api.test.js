@@ -23,13 +23,20 @@ test('camera API requires PIN and enforces persistent reception pause',async()=>
    while(!/listening on port (\d+)/.test(output)){if(Date.now()>end)throw Error('Boot timeout');await sleep(30)}
    const base='http://127.0.0.1:'+output.match(/listening on port (\d+)/)[1];
    assert.equal((await fetch(base+'/api/camera/settings')).status,401);
+   assert.equal((await fetch(base+'/api/photo-exports/config')).status,401);
+   assert.equal((await fetch(base+'/api/photo-exports/preview?all=1')).status,401);
+   assert.equal((await fetch(base+'/api/photo-exports',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"all":true}'})).status,401);
    assert.equal((await fetch(base+'/api/ota/status')).status,401);
+   assert.equal((await fetch(base+'/api/diagnostics')).status,401);
+   assert.equal((await fetch(base+'/api/diagnostics/download')).status,401);
    assert.equal((await fetch(base+'/api/ota/start',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
    const input={reception_enabled:true,auto_enabled:false,interval_seconds:600};
    assert.equal((await fetch(base+'/api/camera/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)})).status,401);
    const auth=await fetch(base+'/api/auth/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:'test-pin'})}).then(r=>r.json());
    assert.equal(auth.success,true);
    const headers={'Content-Type':'application/json',Authorization:'Bearer '+auth.token};
+   const log=await fetch(base+'/api/diagnostics',{headers}).then(r=>r.json());
+   assert.equal(log.protocol,1);assert.deepEqual(log.rows,[]);assert.equal(log.mqtt_connected,false);
    assert.equal((await fetch(base+'/api/ota/status',{headers}).then(r=>r.json())).configured,false);
    assert.equal((await fetch(base+'/api/ota/start',{method:'POST',headers,body:'{}'})).status,409);
    const initial=await fetch(base+'/api/camera/settings',{headers}).then(r=>r.json());
@@ -45,6 +52,15 @@ test('camera API requires PIN and enforces persistent reception pause',async()=>
    const accepted=await ok.json();assert.equal(accepted.device,null);assert.equal(accepted.mqtt_connected,false);
    assert.equal((await upload()).status,201);
    const files=fs.readdirSync(path.join(dir,'images'));
+   const exportInfo=await fetch(base+'/api/photo-exports/preview?all=1',{headers}).then(r=>r.json());
+   assert.equal(exportInfo.count,1);
+   const ticketResponse=await fetch(base+'/api/photo-exports',{method:'POST',headers,body:'{"all":true}'});
+   assert.equal(ticketResponse.status,201);
+   const ticket=await ticketResponse.json();
+   const zip=await fetch(base+ticket.download_url);
+   assert.equal(zip.status,200);
+   assert.equal(zip.headers.get('content-type'),'application/zip');
+   assert.equal(Buffer.from(await zip.arrayBuffer()).readUInt32LE(0),0x04034b50);
    const off=await fetch(base+'/api/camera/settings',{method:'PUT',headers,body:JSON.stringify({...input,reception_enabled:false})});
    assert.equal(off.status,200);assert.equal((await upload()).status,503);
    assert.deepEqual(fs.readdirSync(path.join(dir,'images')),files);

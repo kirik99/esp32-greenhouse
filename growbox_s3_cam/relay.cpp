@@ -1,4 +1,5 @@
 #include "relay.h"
+#include "diagnostics.h"
 #include "config.h"
 #include "ota_update.h"
 
@@ -36,15 +37,15 @@ void lock_heater(bool locked) {
     digitalWrite(relay_pins[internal_idx], HIGH);
     relay_states[internal_idx] = false;
     portEXIT_CRITICAL(&relay_mux);
-    Serial.println("[SAFETY ALERT] Heater LOCKED due to emergency cutoff!");
+    DiagnosticSerial.println("[SAFETY ALERT] Heater LOCKED due to emergency cutoff!");
   } else {
     portEXIT_CRITICAL(&relay_mux);
-    Serial.println("[SAFETY INFO] Heater UNLOCKED (normal conditions restored)");
+    DiagnosticSerial.println("[SAFETY INFO] Heater UNLOCKED (normal conditions restored)");
   }
 }
 
 void emergency_cutoff(const char* reason) {
-  Serial.printf("[EMERGENCY CUTOFF TRIGGERED] Reason: %s\n", reason);
+  DiagnosticSerial.printf("[EMERGENCY CUTOFF TRIGGERED] Reason: %s\n", reason);
   set_relay(2, false);
   set_relay(3, false);
   lock_heater(true);
@@ -58,13 +59,13 @@ void set_relay(int index, bool state) {
     if (state && ota_busy()) { portEXIT_CRITICAL(&relay_mux); return; }
     if (index == 2 && state && heater_locked) {
       portEXIT_CRITICAL(&relay_mux);
-      Serial.println("[SAFETY REJECT] Blocked turning Heater ON: Overheat Lockout active!");
+      DiagnosticSerial.println("[SAFETY REJECT] Blocked turning Heater ON: Overheat Lockout active!");
       return;
     }
     digitalWrite(relay_pins[internal_idx], state ? LOW : HIGH);
     relay_states[internal_idx] = state;
     portEXIT_CRITICAL(&relay_mux);
-    Serial.printf("Relay %d set to %s\n", index, state ? "ON" : "OFF");
+    DiagnosticSerial.printf("Relay %d set to %s\n", index, state ? "ON" : "OFF");
   }
 }
 

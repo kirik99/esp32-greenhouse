@@ -1,4 +1,5 @@
 #include "sensors.h"
+#include "diagnostics.h"
 #include "config.h"
 #include "relay.h"
 #include "sht30.h"
@@ -99,14 +100,14 @@ static bool sht30_init_on_bus(int sda, int scl) {
         sensor_sht_status = "OK";
         sensor_bme_ok = true;
         sensor_bme_status = "OK";
-        Serial.printf("[SENSORS] SHT30 found at %s (I2C SDA=%d SCL=%d, bus devices: %s)\n",
+        DiagnosticSerial.printf("[SENSORS] SHT30 found at %s (I2C SDA=%d SCL=%d, bus devices: %s)\n",
                       hexByte(addr).c_str(), sda, scl, i2c_devices.c_str());
         return true;
       }
     }
   }
 
-  Serial.printf("[SENSORS] No SHT30 at 0x44/0x45 (I2C SDA=%d SCL=%d, bus devices: %s)\n",
+  DiagnosticSerial.printf("[SENSORS] No SHT30 at 0x44/0x45 (I2C SDA=%d SCL=%d, bus devices: %s)\n",
                 sda, scl, i2c_devices.c_str());
   return false;
 }
@@ -119,9 +120,9 @@ static void autodetect_sht30() {
 
 #if I2C_FALLBACK_ENABLED
   // Attempt 2: Swapped pair (in case Green and Blue wires are swapped: SDA=GPIO 2, SCL=GPIO 1)
-  Serial.println("[SENSORS] SHT30 not detected on primary pins. Testing swapped lines (SDA <-> SCL)...");
+  DiagnosticSerial.println("[SENSORS] SHT30 not detected on primary pins. Testing swapped lines (SDA <-> SCL)...");
   if (sht30_init_on_bus(PIN_SCL, PIN_SDA)) {
-    Serial.printf("[SENSORS OK] SHT30 auto-detected with swapped lines (SDA=%d, SCL=%d)!\n",
+    DiagnosticSerial.printf("[SENSORS OK] SHT30 auto-detected with swapped lines (SDA=%d, SCL=%d)!\n",
                   PIN_SCL, PIN_SDA);
     return;
   }
@@ -136,7 +137,7 @@ static void autodetect_sht30() {
 }
 
 static void sht_recover_bus() {
-  Serial.printf("[SENSORS] SHT30 unreadable %d times in a row: recovering I2C bus...\n",
+  DiagnosticSerial.printf("[SENSORS] SHT30 unreadable %d times in a row: recovering I2C bus...\n",
                 sht_fail_streak);
   autodetect_sht30();
 }
@@ -264,7 +265,7 @@ static float ds18b20_read_temp_c(int pin) {
 // ---------------------------------------------------------------------------
 
 void setup_sensors() {
-  Serial.println("[SENSORS] Initializing SHT30 air temperature & humidity sensor...");
+  DiagnosticSerial.println("[SENSORS] Initializing SHT30 air temperature & humidity sensor...");
   autodetect_sht30();
 
   current_ds_pin = PIN_DS18B20;
@@ -274,15 +275,15 @@ void setup_sensors() {
   ds18b20.setOneWire(&oneWire);
   ds18b20.begin();
   ds18b20_hw_init(current_ds_pin);
-  Serial.printf("[SENSORS] DS18B20 initialized on GPIO %d (idle level=%d)\n",
+  DiagnosticSerial.printf("[SENSORS] DS18B20 initialized on GPIO %d (idle level=%d)\n",
                 current_ds_pin, digitalRead(current_ds_pin));
 
   Serial1.begin(MHZ19_BAUD, SERIAL_8N1, PIN_MHZ19_RX, PIN_MHZ19_TX);
   delay(50);
-  Serial.printf("[SENSORS] MH-Z19B UART ready (RX=%d, TX=%d, %d baud). VIN must be 5V!\n",
+  DiagnosticSerial.printf("[SENSORS] MH-Z19B UART ready (RX=%d, TX=%d, %d baud). VIN must be 5V!\n",
                 PIN_MHZ19_RX, PIN_MHZ19_TX, MHZ19_BAUD);
 
-  Serial.printf("[SENSORS] I2C bus active on SDA=%d SCL=%d, devices: %s\n",
+  DiagnosticSerial.printf("[SENSORS] I2C bus active on SDA=%d SCL=%d, devices: %s\n",
                 i2c_sda_active, i2c_scl_active, i2c_devices.c_str());
 }
 
@@ -307,14 +308,14 @@ static void mhz19_disable_abc() {
   uint8_t cmd[9] = {0xFF, 0x01, 0x79, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   cmd[8] = mhz19_checksum(cmd);
   mhz19_send(cmd);
-  Serial.println("[SENSORS] MH-Z19B ABC (auto-calibration) disabled for mushroom cultivation.");
+  DiagnosticSerial.println("[SENSORS] MH-Z19B ABC (auto-calibration) disabled for mushroom cultivation.");
 }
 
 void calibrate_co2_zero() {
   uint8_t cmd[9] = {0xFF, 0x01, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   cmd[8] = mhz19_checksum(cmd);
   mhz19_send(cmd);
-  Serial.println("[CO2] Zero-point calibration command sent (400 ppm baseline)!");
+  DiagnosticSerial.println("[CO2] Zero-point calibration command sent (400 ppm baseline)!");
 }
 
 #define MHZ19_ERR_NO_REPLY  -1
@@ -493,8 +494,8 @@ void read_sensors() {
   }
 
   sensor_diag = diag;
-  Serial.printf("[DIAG] %s\n", sensor_diag.c_str());
-  Serial.printf("Sensors: Air=%.2fC, Hum=%.2f%%, Sub=%.2fC, CO2=%dppm (SHT30: %s at 0x%02X)\n",
+  DiagnosticSerial.printf("[DIAG] %s\n", sensor_diag.c_str());
+  DiagnosticSerial.printf("Sensors: Air=%.2fC, Hum=%.2f%%, Sub=%.2fC, CO2=%dppm (SHT30: %s at 0x%02X)\n",
                 current_air_temp, current_humidity, current_substrate_temp, current_co2_ppm,
                 sensor_sht_status.c_str(), sht_i2c_addr);
 
@@ -526,7 +527,7 @@ void check_safety_failsafes() {
   if (current_humidity != -999.0 && current_humidity >= EMERGENCY_HUMIDITY_MAX) {
     if (get_relay(1)) {
       set_relay(1, false);
-      Serial.println("[SAFETY ALERT] Humidifier cut OFF: Humidity >= 98%!");
+      DiagnosticSerial.println("[SAFETY ALERT] Humidifier cut OFF: Humidity >= 98%!");
     }
     if (current_alarm == "NONE") {
       current_alarm = "OVERHUMIDITY_CUTOFF";
@@ -539,7 +540,7 @@ void check_safety_failsafes() {
   if (current_air_temp < -100.0 && current_substrate_temp < -100.0) {
     if (get_relay(2)) {
       set_relay(2, false);
-      Serial.println("[SAFETY ALERT] Heater cut OFF: Temperature sensors disconnected (-999)!");
+      DiagnosticSerial.println("[SAFETY ALERT] Heater cut OFF: Temperature sensors disconnected (-999)!");
     }
     if (current_alarm == "NONE") {
       current_alarm = "SENSOR_DISCONNECTED";
