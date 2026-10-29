@@ -78,8 +78,12 @@ function yuy2ToRgba(yuy2Buffer, width, height) {
 
 let latestSensorsSnapshot = {};
 
-mqttClient.on('message', async (topic, message) => {
+mqttClient.on('message', async (topic, message, packet) => {
   try {
+    if (topic.startsWith(DIAGNOSTICS_TOPIC)) {
+      diagnostics.ingest(topic, message, packet);
+      return;
+    }
     if (topic === CAMERA_STATE_TOPIC) {
       cameraSettings.observeState(JSON.parse(message.toString()));
       return;
@@ -113,6 +117,7 @@ mqttClient.on('message', async (topic, message) => {
     } 
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
+      diagnostics.observeStatus(data);
       cameraSettings.observeStatus(data);
       ota.observe(data);
       const point = new Point('relay_status');

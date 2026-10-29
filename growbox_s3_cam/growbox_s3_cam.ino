@@ -10,12 +10,13 @@
 #include "camera_capture.h"
 #include "camera_settings.h"
 #include "ota_update.h"
+#include "diagnostics.h"
 
 unsigned long last_sensor_time = 0;
 unsigned long last_status_time = 0;
 
 void logMsg(const String &msg) {
-  Serial.println(msg);
+  DiagnosticSerial.println(msg);
 }
 
 bool setup_wifi() {
@@ -51,9 +52,9 @@ bool setup_wifi() {
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 12000) {
       delay(500);
-      Serial.print(".");
+      DiagnosticSerial.print(".");
     }
-    Serial.println();
+    DiagnosticSerial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
       logMsg("[WIFI OK] Connected to " + String(networks[i].ssid) +
@@ -74,6 +75,7 @@ void setup() {
   setup_relays();
 
   Serial.begin(115200);
+  setup_diagnostics();
   delay(1000);
 
   logMsg("\n========================================");

@@ -6,6 +6,7 @@
 #include "camera_capture.h"
 #include "camera_settings.h"
 #include "ota_update.h"
+#include "diagnostics.h"
 
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -56,7 +57,7 @@ static void init_client_id() {
 }
 
 static void sync_ntp_time() {
-  Serial.println("[TIME] Synchronizing system time via NTP for TLS certificate validation...");
+  DiagnosticSerial.println("[TIME] Synchronizing system time via NTP for TLS certificate validation...");
   configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
 
   time_t now = time(nullptr);
@@ -64,19 +65,19 @@ static void sync_ntp_time() {
   // Wait up to 10 seconds for NTP synchronization (> Jan 1 2024 = 1704067200)
   while (now < 1704067200 && millis() - start < 10000) {
     delay(400);
-    Serial.print(".");
+    DiagnosticSerial.print(".");
     now = time(nullptr);
   }
-  Serial.println();
+  DiagnosticSerial.println();
 
   if (now >= 1704067200) {
     struct tm timeinfo;
     gmtime_r(&now, &timeinfo);
     char buf[64];
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S UTC", &timeinfo);
-    Serial.printf("[TIME OK] Synchronized UTC time: %s (epoch: %ld)\n", buf, (long)now);
+    DiagnosticSerial.printf("[TIME OK] Synchronized UTC time: %s (epoch: %ld)\n", buf, (long)now);
   } else {
-    Serial.println("[TIME WARN] NTP sync timed out! TLS certificate validation may fail if RTC is uninitialized.");
+    DiagnosticSerial.println("[TIME WARN] NTP sync timed out! TLS certificate validation may fail if RTC is uninitialized.");
   }
 }
 
@@ -87,7 +88,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
   switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED: {
       is_connected = true;
-      Serial.println("[MQTT OK] Connected to broker!");
+      DiagnosticSerial.println("[MQTT OK] Connected to broker!");
 
       // Resubscribe to all control topics on connection / reconnection
       int id1 = esp_mqtt_client_subscribe(client, "growbox/relay/set", 1);
@@ -97,7 +98,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
       char ota_topic[80];
       snprintf(ota_topic, sizeof(ota_topic), "growbox/ota/%s/set", client_id_str);
       esp_mqtt_client_subscribe(client, ota_topic, 1);
-      Serial.printf("[MQTT] Subscribed to control topics (IDs: %d, %d, %d)\n", id1, id2, id3);
+      DiagnosticSerial.printf("[MQTT] Subscribed to control topics (IDs: %d, %d, %d)\n", id1, id2, id3);
 
       // Publish initial status report immediately
       mqtt_publish_status();
@@ -108,18 +109,18 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
       is_connected = false;
       unsigned long now = millis();
       if (now - last_disconnect_log > 5000) {
-        Serial.println("[MQTT] Disconnected from broker. Retrying in background...");
+        DiagnosticSerial.println("[MQTT] Disconnected from broker. Retrying in background...");
         last_disconnect_log = now;
       }
       break;
     }
 
     case MQTT_EVENT_SUBSCRIBED:
-      Serial.printf("[MQTT] Topic subscription acknowledged (msg_id: %d)\n", event->msg_id);
+      DiagnosticSerial.printf("[MQTT] Topic subscription acknowledged (msg_id: %d)\n", event->msg_id);
       break;
 
     case MQTT_EVENT_UNSUBSCRIBED:
-      Serial.printf("[MQTT] Topic unsubscription acknowledged (msg_id: %d)\n", event->msg_id);
+      DiagnosticSerial.printf("[MQTT] Topic unsubscription acknowledged (msg_id: %d)\n", event->msg_id);
       break;
 
     case MQTT_EVENT_DATA: {
@@ -133,19 +134,19 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
       int data_len = event->data_len;
       char* data_buf = (char*)malloc(data_len + 1);
       if (!data_buf) {
-        Serial.println("[MQTT ERR] Out of memory allocating incoming payload buffer!");
+        DiagnosticSerial.println("[MQTT ERR] Out of memory allocating incoming payload buffer!");
         break;
       }
       memcpy(data_buf, event->data, data_len);
       data_buf[data_len] = '\0';
 
-      Serial.printf("[MQTT MSG] Topic: %s (len: %d) -> %s\n", topic_buf, data_len, data_buf);
+      DiagnosticSerial.printf("[MQTT] Control message received (%d bytes); payload not logged\n", data_len);
 
       char ota_topic[80];
       snprintf(ota_topic, sizeof(ota_topic), "growbox/ota/%s/set", client_id_str);
       if (strcmp(topic_buf, ota_topic) == 0) {
         if (event->retain || event->current_data_offset != 0 || event->data_len != event->total_data_len ||
-            !queue_ota(data_buf, static_cast<size_t>(data_len))) Serial.println("[OTA] Command rejected");
+            !queue_ota(data_buf, static_cast<size_t>(data_len))) DiagnosticSerial.println("[OTA] Command rejected");
       } else if (strcmp(topic_buf, "growbox/relay/set") == 0) {
         #if ARDUINOJSON_VERSION_MAJOR >= 7
         JsonDocument doc;
@@ -161,18 +162,18 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             mqtt_publish_status();
           }
         } else {
-          Serial.printf("[MQTT ERR] JSON parse error in relay/set: %s\n", error.c_str());
+          DiagnosticSerial.printf("[MQTT ERR] JSON parse error in relay/set: %s\n", error.c_str());
         }
       } else if (strcmp(topic_buf, "growbox/camera/config/set") == 0) {
         if (event->current_data_offset != 0 || event->data_len != event->total_data_len ||
             !queue_camera_settings(data_buf, static_cast<size_t>(data_len))) {
-          Serial.println("[CAMERA CONFIG] Invalid or fragmented configuration rejected");
+          DiagnosticSerial.println("[CAMERA CONFIG] Invalid or fragmented configuration rejected");
         }
       } else if (strcmp(topic_buf, "growbox/camera/capture") == 0) {
-        Serial.println("[MQTT] Manual camera snapshot trigger received!");
+        DiagnosticSerial.println("[MQTT] Manual camera snapshot trigger received!");
         trigger_camera_capture();
       } else if (strcmp(topic_buf, "growbox/co2/calibrate") == 0) {
-        Serial.println("[MQTT] CO2 Zero Calibration trigger received!");
+        DiagnosticSerial.println("[MQTT] CO2 Zero Calibration trigger received!");
         calibrate_co2_zero();
       }
 
@@ -181,15 +182,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 
     case MQTT_EVENT_ERROR: {
-      Serial.println("[MQTT ERR] Transport or protocol error reported");
+      DiagnosticSerial.println("[MQTT ERR] Transport or protocol error reported");
       if (event->error_handle) {
         if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-          Serial.printf("[MQTT ERR] Transport error details: esp_tls_last_esp_err=0x%x, esp_tls_stack_err=0x%x, sock_errno=%d\n",
+          DiagnosticSerial.printf("[MQTT ERR] Transport error details: esp_tls_last_esp_err=0x%x, esp_tls_stack_err=0x%x, sock_errno=%d\n",
                         event->error_handle->esp_tls_last_esp_err,
                         event->error_handle->esp_tls_stack_err,
                         event->error_handle->esp_transport_sock_errno);
         } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
-          Serial.printf("[MQTT ERR] Connection refused by broker, return code: %d\n",
+          DiagnosticSerial.printf("[MQTT ERR] Connection refused by broker, return code: %d\n",
                         event->error_handle->connect_return_code);
         }
       }
@@ -243,10 +244,10 @@ void setup_mqtt() {
 
   #if USE_MQTT_TLS
     #if MQTT_ALLOW_INSECURE_TLS
-      Serial.println("[MQTT WARN] Insecure TLS mode: Certificate validation DISABLED!");
+      DiagnosticSerial.println("[MQTT WARN] Insecure TLS mode: Certificate validation DISABLED!");
       mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
     #else
-      Serial.println("[MQTT] Strict TLS mode: Verifying server certificate using ESP CRT bundle.");
+      DiagnosticSerial.println("[MQTT] Strict TLS mode: Verifying server certificate using ESP CRT bundle.");
       mqtt_cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
       mqtt_cfg.broker.verification.skip_cert_common_name_check = false;
     #endif
@@ -279,23 +280,23 @@ void setup_mqtt() {
   const char* proto = (transport == MQTT_TRANSPORT_OVER_WSS) ? "wss" :
                       (transport == MQTT_TRANSPORT_OVER_WS)  ? "ws" :
                       (transport == MQTT_TRANSPORT_OVER_SSL) ? "mqtts" : "mqtt";
-  Serial.printf("[MQTT] Configuring %s://%s:%d%s (Client ID: %s)\n",
+  DiagnosticSerial.printf("[MQTT] Configuring %s://%s:%d%s (Client ID: %s)\n",
                 proto, MQTT_HOST, (int)MQTT_PORT,
                 USE_MQTT_WEBSOCKETS ? MQTT_PATH : "",
                 client_id_str);
 
   mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
   if (!mqtt_client) {
-    Serial.println("[MQTT ERR] Failed to initialize esp-mqtt client!");
+    DiagnosticSerial.println("[MQTT ERR] Failed to initialize esp-mqtt client!");
     return;
   }
 
   esp_mqtt_client_register_event(mqtt_client, MQTT_EVENT_ANY, mqtt_event_handler, NULL);
   esp_err_t err = esp_mqtt_client_start(mqtt_client);
   if (err != ESP_OK) {
-    Serial.printf("[MQTT ERR] esp_mqtt_client_start failed: %d\n", err);
+    DiagnosticSerial.printf("[MQTT ERR] esp_mqtt_client_start failed: %d\n", err);
   } else {
-    Serial.println("[MQTT OK] Client background service started.");
+    DiagnosticSerial.println("[MQTT OK] Client background service started.");
   }
 }
 
@@ -306,7 +307,7 @@ void mqtt_loop() {
   bool is_wifi = (WiFi.status() == WL_CONNECTED);
 
   if (!was_wifi_connected && is_wifi && mqtt_client) {
-    Serial.println("[MQTT] Wi-Fi restored, triggering reconnect...");
+    DiagnosticSerial.println("[MQTT] Wi-Fi restored, triggering reconnect...");
     esp_mqtt_client_reconnect(mqtt_client);
   }
   was_wifi_connected = is_wifi;
@@ -359,7 +360,7 @@ void mqtt_publish_sensors() {
   size_t len = serializeJson(doc, buffer);
   int msg_id = esp_mqtt_client_publish(mqtt_client, "growbox/sensors", buffer, len, 0, 0);
   if (msg_id < 0) {
-    Serial.printf("[MQTT ERR] Failed to publish growbox/sensors (code: %d)\n", msg_id);
+    DiagnosticSerial.printf("[MQTT ERR] Failed to publish growbox/sensors (code: %d)\n", msg_id);
   }
 }
 
@@ -384,12 +385,13 @@ void mqtt_publish_status() {
   fill_camera_settings(doc["camera_config"].to<JsonObject>());
   fill_ota_status(doc["ota"].to<JsonObject>());
   doc["camera_config"]["device_id"] = client_id_str;
+  fill_diagnostics_status(doc["diagnostics"].to<JsonObject>());
 
   char buffer[2048];
   size_t len = serializeJson(doc, buffer, sizeof(buffer));
   int msg_id = esp_mqtt_client_publish(mqtt_client, "growbox/status", buffer, len, 0, 0);
   if (msg_id < 0) {
-    Serial.printf("[MQTT ERR] Failed to publish growbox/status (code: %d)\n", msg_id);
+    DiagnosticSerial.printf("[MQTT ERR] Failed to publish growbox/status (code: %d)\n", msg_id);
   }
 }
 
@@ -409,23 +411,41 @@ void publish_camera_settings() {
 
 void mqtt_publish_image(const char* json_payload) {
   if (!is_connected || !mqtt_client) {
-    Serial.println("[CAMERA ERR] Image publication aborted: MQTT not connected!");
+    DiagnosticSerial.println("[CAMERA ERR] Image publication aborted: MQTT not connected!");
     return;
   }
 
   size_t len = strlen(json_payload);
-  Serial.printf("[CAMERA] Queuing image to growbox/image/raw (%u bytes)...\n", (unsigned int)len);
+  DiagnosticSerial.printf("[CAMERA] Queuing image to growbox/image/raw (%u bytes)...\n", (unsigned int)len);
 
   int msg_id = esp_mqtt_client_enqueue(mqtt_client, "growbox/image/raw", json_payload, len, 0, 0, true);
   if (msg_id >= 0) {
-    Serial.println("[CAMERA OK] Image queued in MQTT outbox!");
+    DiagnosticSerial.println("[CAMERA OK] Image queued in MQTT outbox!");
   } else {
     msg_id = esp_mqtt_client_publish(mqtt_client, "growbox/image/raw", json_payload, len, 0, 0);
     if (msg_id >= 0) {
-      Serial.println("[CAMERA OK] Image published directly!");
+      DiagnosticSerial.println("[CAMERA OK] Image published directly!");
     } else {
-      Serial.printf("[CAMERA ERR] Image publication failed (%u bytes), code: %d\n",
+      DiagnosticSerial.printf("[CAMERA ERR] Image publication failed (%u bytes), code: %d\n",
                     (unsigned int)len, msg_id);
     }
   }
+}
+
+bool mqtt_enqueue_diagnostic(const char* boot_id, uint32_t seq, uint32_t uptime_ms,
+                             uint32_t dropped, const char* level, const char* message) {
+  if (!mqtt_client || !mqtt_is_connected() || esp_mqtt_client_get_outbox_size(mqtt_client) > 8192) return false;
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument doc;
+#else
+  StaticJsonDocument<768> doc;
+#endif
+  doc["protocol"] = 1; doc["device_id"] = client_id_str; doc["boot_id"] = boot_id;
+  doc["seq"] = seq; doc["uptime_ms"] = uptime_ms; doc["dropped"] = dropped;
+  doc["level"] = level; doc["message"] = message;
+  char payload[768], topic[80];
+  if (measureJson(doc) >= sizeof(payload)) return false;
+  const size_t length = serializeJson(doc, payload, sizeof(payload));
+  snprintf(topic, sizeof(topic), "growbox/diagnostics/%s", client_id_str);
+  return esp_mqtt_client_enqueue(mqtt_client, topic, payload, length, 0, 0, true) >= 0;
 }

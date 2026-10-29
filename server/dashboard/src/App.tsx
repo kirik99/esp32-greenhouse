@@ -41,7 +41,7 @@ function App() {
               <Gauge size={20} className="text-blue-400" />
               Датчики
             </h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <SensorCard 
                 title="Температура" 
                 value={sensors?.temp} 
@@ -65,14 +65,6 @@ function App() {
                 unit="ppm" 
                 icon={Wind} 
                 colorClass="text-emerald-400" 
-              />
-              <SensorCard 
-                title="Давление" 
-                value={sensors?.pressure} 
-                offline={!!sensors && !sensors.online?.pressure}
-                unit="hPa" 
-                icon={Gauge} 
-                colorClass="text-purple-400" 
               />
               <SensorCard 
                 title="Темп. субстрата" 

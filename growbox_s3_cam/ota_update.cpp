@@ -1,4 +1,5 @@
 #include "ota_update.h"
+#include "diagnostics.h"
 #include "config.h"
 #include "wifi_config.h"
 #include "relay.h"
@@ -152,7 +153,7 @@ static void download_task(void *arg) {
     mqtt_publish_status(); delay(500); ESP.restart();
   }
   state = "failed"; busy = false;
-  Serial.println("[OTA] Download/validation failed; active firmware unchanged");
+  DiagnosticSerial.println("[OTA] Download/validation failed; active firmware unchanged");
   vTaskDelete(nullptr);
 }
 
@@ -168,7 +169,7 @@ void setup_ota() {
   ready = OTA_ENABLED && strlen(OTA_PUBLIC_KEY_PEM) > 0 && strlen(OTA_DOWNLOAD_TOKEN) >= 32 && valid_url(OTA_FIRMWARE_BASE_URL) &&
       rollback_enabled() && destination && destination != running && commands;
   state = verifying ? "boot_verification" : (ready ? "idle" : "disabled");
-  Serial.printf("[OTA] ready=%d rollback=%d next_slot=%u\n", ready, rollback_enabled(), destination ? (unsigned)destination->size : 0);
+  DiagnosticSerial.printf("[OTA] ready=%d rollback=%d next_slot=%u\n", ready, rollback_enabled(), destination ? (unsigned)destination->size : 0);
 }
 
 void process_ota() {
