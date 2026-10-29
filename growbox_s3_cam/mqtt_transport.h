@@ -13,6 +13,8 @@
 void setup_mqtt();
 void mqtt_loop();
 bool mqtt_is_connected();
+bool mqtt_enqueue_diagnostic(const char* boot_id, uint32_t seq, uint32_t uptime_ms,
+                             uint32_t dropped, const char* level, const char* message);
 
 // Telemetry & Status Publishing
 void mqtt_publish_sensors();

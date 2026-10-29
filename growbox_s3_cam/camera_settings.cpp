@@ -1,4 +1,5 @@
 #include "camera_settings.h"
+#include "diagnostics.h"
 #include "camera_capture.h"
 #include "camera_schedule.h"
 #include "mqtt_transport.h"
@@ -90,7 +91,7 @@ void setup_camera_settings() {
   }
   // Even restored auto capture waits for this boot's retained server config.
   synchronized_this_boot = false;
-  Serial.println("[CAMERA CONFIG] Ready; auto capture waits for server configuration");
+  DiagnosticSerial.println("[CAMERA CONFIG] Ready; auto capture waits for server configuration");
 }
 
 bool queue_camera_settings(const char *json, size_t length) {
@@ -121,9 +122,9 @@ void process_camera_settings() {
   if (written) {
     activate(next, true);
     synchronized_this_boot = true;
-    Serial.printf("[CAMERA CONFIG] Applied: auto=%d interval=%u seconds\n", next.auto_enabled, (unsigned)next.interval_seconds);
+    DiagnosticSerial.printf("[CAMERA CONFIG] Applied: auto=%d interval=%u seconds\n", next.auto_enabled, (unsigned)next.interval_seconds);
   } else {
-    Serial.println("[CAMERA CONFIG] NVS save failed; requested auto-enable not applied");
+    DiagnosticSerial.println("[CAMERA CONFIG] NVS save failed; requested auto-enable not applied");
   }
   publish_camera_settings();
 }

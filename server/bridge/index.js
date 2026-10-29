@@ -15,6 +15,9 @@ try { ({ createTelegramBot } = require('./telegram')); }
 catch (err) { console.error('[Telegram] Module unavailable; bot disabled:', err.message); }
 const { installImageUpload } = require('./image-upload');
 const { CameraSettings, STATE_TOPIC: CAMERA_STATE_TOPIC } = require('./camera-settings');
+const { DeviceDiagnostics, installDiagnostics, TOPIC_PREFIX: DIAGNOSTICS_TOPIC } = require('./diagnostics');
+const diagnostics = new DeviceDiagnostics({ secrets: Object.entries(process.env)
+  .filter(([key]) => /PASSWORD|TOKEN|PRIVATE_KEY/.test(key)).map(([, value]) => value).filter(Boolean) });
 
 // Configuration
 const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
@@ -112,6 +115,7 @@ if (createTelegramBot) {
 }
 
 mqttClient.on('connect', () => {
+  mqttClient.subscribe(DIAGNOSTICS_TOPIC + '+', { qos: 0 });
   mqttClient.subscribe(CAMERA_STATE_TOPIC, { qos: 1 });
   cameraSettings.publish();
   console.log(`[${new Date().toISOString()}] Connected to MQTT broker at ${MQTT_HOST}:${MQTT_PORT}`);
@@ -206,8 +210,12 @@ function saveImageBuffer(imgBuffer, width = 1280, height = 720) {
   return { success: true, filename, filepath, size: imgBuffer.length };
 }
 
-mqttClient.on('message', async (topic, message) => {
+mqttClient.on('message', async (topic, message, packet) => {
   try {
+    if (topic.startsWith(DIAGNOSTICS_TOPIC)) {
+      diagnostics.ingest(topic, message, packet);
+      return;
+    }
     if (topic === CAMERA_STATE_TOPIC) {
       cameraSettings.observeState(JSON.parse(message.toString()));
       return;
@@ -261,6 +269,7 @@ mqttClient.on('message', async (topic, message) => {
     } 
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
+      diagnostics.observeStatus(data);
       cameraSettings.observeStatus(data);
       ota.observe(data);
       const point = new Point('relay_status');
@@ -543,6 +552,7 @@ app.post('/api/capture', requireAuth, (req, res) => {
 });
 
 require('./photo-export').installPhotoExport(app, { imagesDir: IMAGES_DIR, requireAuth });
+installDiagnostics(app, { store: diagnostics, requireAuth, mqttConnected: () => !!mqttClient.connected });
 
 app.get('/api/images', requireTelemetryAuth, (req, res) => {
   fs.readdir(IMAGES_DIR, (err, files) => {
