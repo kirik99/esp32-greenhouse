@@ -352,9 +352,11 @@ void read_sensors() {
     float p = bme.readPressure() / 100.0F;
 
     const bool t_ok = valid_temp(t);
-    const bool h_ok = valid_hum(h);
-    const bool p_ok = valid_pres(p);
-    const bool any_ok = t_ok || h_ok || p_ok;
+    // BME280 humidity & pressure compensation formulas strictly require valid t_fine from temperature.
+    // When the sensor is disconnected, I2C reads 0xFF, which Adafruit_BME280 clamps to 100.0% humidity.
+    const bool h_ok = t_ok && valid_hum(h);
+    const bool p_ok = t_ok && valid_pres(p);
+    const bool any_ok = t_ok && (h_ok || p_ok);
 
     // Frozen-register detector: with a working chip the raw values always move a
     // little (0.01 C / 0.01 hPa resolution), so identical T+H+P three cycles in a

@@ -32,6 +32,7 @@ const writeApi = influxDB.getWriteApi(INFLUXDB_ORG, INFLUXDB_BUCKET);
 writeApi.useDefaultTags({ location: 'growbox' });
 
 const mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
+  queueQoSZero: false, // Never queue stale control/OTA commands across disconnects.
   username: MQTT_USER,
   password: MQTT_PASSWORD,
   clientId: `growbox_bridge_${Math.random().toString(16).slice(2, 8)}`
@@ -79,6 +80,10 @@ let latestSensorsSnapshot = {};
 
 mqttClient.on('message', async (topic, message) => {
   try {
+    if (topic === CAMERA_STATE_TOPIC) {
+      cameraSettings.observeState(JSON.parse(message.toString()));
+      return;
+    }
     if (topic === 'growbox/sensors') {
       const data = JSON.parse(message.toString());
       latestSensorsSnapshot = data; // Cache for image metadata
@@ -108,6 +113,8 @@ mqttClient.on('message', async (topic, message) => {
     } 
     else if (topic === 'growbox/status') {
       const data = JSON.parse(message.toString());
+      cameraSettings.observeStatus(data);
+      ota.observe(data);
       const point = new Point('relay_status');
       if (Array.isArray(data.relays)) {
         const names = ['humidifier','heater','heater_fan','fan1','fan2','backlight'];

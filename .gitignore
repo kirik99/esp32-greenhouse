@@ -48,3 +48,9 @@ server/mosquitto/data/
 server/mosquitto/log/
 server/influxdb_data/
 server/influxdb_config/
+server/bridge/data/
+
+# Local browser verification artifacts
+.playwright-cli/
+output/playwright/
+server/bridge/firmware/

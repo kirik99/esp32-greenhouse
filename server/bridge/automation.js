@@ -304,7 +304,7 @@ class UniversalClimateEngine {
         const timeSinceToggle = now - state.lastRelayToggleTime[i];
         const isEmergencyOff = (!targetState && (
           (relayId === 2 && safetyHeaterCutoff) ||
-          (relayId === 1 && safetyHumidifierCutoff)
+          (relayId === 1 && (safetyHumidifierCutoff || isHumidifierOverrun))
         ));
 
         if (isEmergencyOff || timeSinceToggle >= this.ANTI_CHATTER_MS) {

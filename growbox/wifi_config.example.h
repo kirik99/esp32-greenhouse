@@ -1,8 +1,17 @@
 #ifndef WIFI_CONFIG_EXAMPLE_H
 #define WIFI_CONFIG_EXAMPLE_H
 
-#define WIFI_SSID     "your_wifi_name"
-#define WIFI_PASSWORD "your_wifi_password"
+// --- Wi-Fi Networks ---
+// ESP32 tries to connect to network 1 first; if unavailable, falls back to network 2
+#define WIFI_SSID_1     "your_primary_wifi"
+#define WIFI_PASSWORD_1 "your_primary_password"
+
+#define WIFI_SSID_2     "your_secondary_wifi"
+#define WIFI_PASSWORD_2 "your_secondary_password"
+
+// Backward compatibility aliases
+#define WIFI_SSID     WIFI_SSID_1
+#define WIFI_PASSWORD WIFI_PASSWORD_1
 
 // --- Remote Production Profile: MQTT over Secure WebSocket (WSS on port 443) ---
 #define MQTT_HOST     "growbox.weird.cyou"

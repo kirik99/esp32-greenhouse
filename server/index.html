@@ -119,6 +119,12 @@
         <span id="authText" class="font-medium text-zinc-400 font-mono text-[11px]">PIN-ЗАЩИТА</span>
       </button>
 
+      <!-- OTA Firmware Update Modal Trigger Button -->
+      <button id="btnOpenOtaModal" onclick="openOtaModal()" title="Обновление прошивки по сети (OTA)" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] hover:border-emerald-500/40 text-xs text-zinc-300 hover:text-white transition cursor-pointer">
+        <span>⚡</span>
+        <span class="font-medium font-mono text-[11px]">OTA</span>
+      </button>
+
       <div id="statusBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900 border border-white/[0.08] text-xs">
         <div id="statusDot" class="w-2 h-2 rounded-full bg-amber-400 transition-colors duration-300"></div>
         <span id="statusText" class="font-medium text-zinc-300 font-mono text-[11px]">CONNECTING</span>
@@ -305,7 +311,7 @@
       <section class="lg:col-span-5">
         <div class="flex items-center justify-between mb-3">
           <h2 class="text-xs font-semibold tracking-wider text-zinc-400 uppercase">Визуальный мониторинг</h2>
-          <span class="text-[11px] font-mono text-zinc-400">UVC Host</span>
+          <span class="text-[11px] font-mono text-zinc-400">OV2640 · HTTPS</span>
         </div>
 
         <div class="panel p-4 flex flex-col">
@@ -322,10 +328,10 @@
 
             <!-- Resolution & Timestamp Badges -->
             <div class="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur border border-white/10 text-[10px] font-mono text-zinc-400">
-              160×120 YUY2
+              JPEG
             </div>
             <div id="camMeta" class="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur border border-white/10 text-[10px] font-mono text-zinc-400">
-              Авто: каждые 10 мин
+              Ожидание снимка
             </div>
           </div>
 
@@ -344,6 +350,28 @@
               </svg>
             </button>
           </div>
+
+          <section class="mt-4 pt-4 border-t border-white/[0.06]" aria-labelledby="cameraSettingsTitle">
+            <h3 id="cameraSettingsTitle" class="text-xs font-semibold text-zinc-200 mb-3">Расписание камеры</h3>
+            <form id="cameraSettingsForm" onsubmit="event.preventDefault(); saveCameraSettings()" class="space-y-3">
+              <label class="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                <span>Принимать фото на сервере</span>
+                <input id="cameraReception" type="checkbox" disabled class="w-4 h-4 accent-emerald-500">
+              </label>
+              <label class="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                <span>Автосъёмка на ESP</span>
+                <input id="cameraAuto" type="checkbox" disabled class="w-4 h-4 accent-emerald-500">
+              </label>
+              <label for="cameraInterval" class="flex items-center justify-between gap-3 text-xs text-zinc-300">
+                <span>Интервал, минуты</span>
+                <input id="cameraInterval" type="number" inputmode="numeric" min="1" max="1440" step="1" value="60" disabled
+                  class="w-24 px-2 py-1.5 bg-zinc-950 border border-white/10 rounded-lg text-right font-mono text-zinc-100 disabled:opacity-40">
+              </label>
+              <button id="cameraSettingsSave" type="submit" class="w-full py-2 rounded-lg border border-white/10 bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-100 disabled:opacity-40">Войти по PIN для изменения</button>
+            </form>
+            <p id="cameraSettingsStatus" role="status" aria-live="polite" class="mt-2 text-[11px] leading-relaxed text-zinc-400">Загрузка настроек…</p>
+            <p class="mt-2 text-[10px] leading-relaxed text-zinc-500">При выключенной автосъёмке снимки делаются только по запросу. Пересылка в Telegram настраивается отдельно. Для старой прошивки потребуется одно обновление.</p>
+          </section>
 
           <!-- Gallery Strip & Counter -->
           <div class="mt-4 pt-3 border-t border-white/[0.06]">
@@ -373,15 +401,71 @@
     </div>
   </footer>
 
+  <!-- OTA Firmware Update Modal (Placed in DOM before script) -->
+  <div id="otaModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="panel p-6 max-w-md w-full space-y-4 border-white/20 shadow-2xl animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-white/[0.08] pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 text-sm">
+            ⚡
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-white">Обновление ESP по воздуху (OTA)</h3>
+            <p class="text-[11px] text-zinc-400">Безопасная смена прошивки с проверкой RSA</p>
+          </div>
+        </div>
+        <button onclick="closeOtaModal()" class="text-zinc-500 hover:text-white p-1 cursor-pointer">✕</button>
+      </div>
+
+      <!-- Device & Controller Status -->
+      <div class="bg-zinc-950/60 p-3 rounded-xl border border-white/[0.06] space-y-1">
+        <div class="flex items-center justify-between text-xs font-mono">
+          <span class="text-zinc-400">Статус OTA:</span>
+          <span id="otaStatus" role="status" aria-live="polite" class="text-zinc-200">Загрузка...</span>
+        </div>
+      </div>
+
+      <!-- Option A: Upload only .BIN (Automatic signing on server) -->
+      <div class="space-y-1.5 pt-1">
+        <label for="otaBinFile" class="block text-xs font-medium text-zinc-300">Загрузить прошивку (.bin)</label>
+        <p class="text-[10px] text-zinc-400">Выберите скомпилированный бинарник. Сервер автоматически подпишет его и подготовит обновление.</p>
+        <input id="otaBinFile" type="file" accept=".bin" onchange="uploadFirmwareBin(event)"
+          class="block w-full text-xs text-zinc-300 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-zinc-200 cursor-pointer">
+        <p id="otaBinUploadStatus" class="text-[11px] text-zinc-500 mt-1"></p>
+      </div>
+
+      <!-- Option B: Manual upload of signed manifest .JSON (optional fallback) -->
+      <details class="text-[11px] text-zinc-400 pt-2 border-t border-white/[0.06]">
+        <summary class="cursor-pointer hover:text-zinc-200 py-1">Или выбрать готовый подписанный JSON вручную</summary>
+        <div class="mt-2 space-y-1.5">
+          <input id="otaManifest" type="file" accept=".json,application/json" disabled
+            class="block w-full text-xs text-zinc-300 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-800 file:px-3 file:py-1.5 file:text-zinc-200 disabled:opacity-40 cursor-pointer">
+          <p id="otaSelection" class="text-[11px] text-zinc-400 break-words mt-1">Файл не выбран.</p>
+        </div>
+      </details>
+
+      <!-- Start Update button -->
+      <div class="pt-2">
+        <button id="otaStart" type="button" onclick="startOta()" disabled
+          class="w-full py-2.5 rounded-lg border border-emerald-500/30 bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white disabled:opacity-40 transition cursor-pointer">
+          Обновить ESP32-S3
+        </button>
+        <p class="mt-2 text-[10px] leading-relaxed text-zinc-500">
+          * Обновление возможно только в ручном режиме при всех выключенных реле. ESP32 проверит цифровую подпись, применит прошивку во второй слот и перезагрузится с автоматическим откатом при сбое.
+        </p>
+      </div>
+    </div>
+  </div>
+
   <!-- Script Logic -->
   <script>
     const RELAYS = [
-      { id: 1, name: 'Увлажнитель', pin: 'A1 (GPIO 3)', desc: 'Ультразвуковой генератор тумана' },
-      { id: 2, name: 'Нагреватель', pin: 'A2 (GPIO 9)', desc: 'Основной нагревательный элемент' },
-      { id: 3, name: 'Вент. нагревателя', pin: 'A3 (GPIO 10)', desc: 'Обдув теплообменника' },
-      { id: 4, name: 'Вентилятор 1', pin: 'A4 (GPIO 11)', desc: 'Циркуляция и приток воздуха' },
-      { id: 5, name: 'Вентилятор 2', pin: 'CLK (GPIO 2)', desc: 'Вытяжка и воздухообмен' },
-      { id: 6, name: 'Подсветка', pin: 'OE (GPIO 14)', desc: 'Фитоосвещение камеры' }
+      { id: 1, name: 'Увлажнитель', pin: 'GPIO 42', desc: 'Ультразвуковой генератор тумана' },
+      { id: 2, name: 'Нагреватель', pin: 'GPIO 47', desc: 'Основной нагревательный элемент' },
+      { id: 3, name: 'Вент. нагревателя', pin: 'GPIO 48', desc: 'Обдув теплообменника' },
+      { id: 4, name: 'Вентилятор 1', pin: 'GPIO 21', desc: 'Циркуляция и приток воздуха' },
+      { id: 5, name: 'Вентилятор 2', pin: 'GPIO 14', desc: 'Вытяжка и воздухообмен' },
+      { id: 6, name: 'Подсветка', pin: 'GPIO 3', desc: 'Фитоосвещение камеры' }
     ];
 
     let relayStates = [false, false, false, false, false, false];
@@ -446,6 +530,8 @@
           return ' — сенсор отвечает, но отдаёт служебное значение: проверьте питание VIN = 5 В и дайте прогреться ~3 минуты';
         case 'MEASURE_TRIGGER_FAILED':
           return ' — не удалось запустить измерение, проверьте контакт STEMMA QT';
+        case 'NOT_FOUND':
+          return ' — сенсор не найден на шине I²C (проверьте 3.3 В, GND, SDA=GPIO1, SCL=GPIO2)';
         case 'READ_ERROR':
           return ' — сбои чтения по I²C, проверьте кабель и подтяжки';
         case 'WRONG_CHIP_ID':
@@ -468,13 +554,18 @@
       const problems = [];
       const warnings = [];
 
-      if (!isOk(d.air_temp_ok, d.air_temp) || !isOk(d.humidity_ok, d.humidity) || !isOk(d.pressure_ok, d.pressure)) {
-        problems.push('BME280 (воздух/влажность/давление): ' + esc(d.bme_status || 'нет данных') +
-          sensorHint(d.bme_status) +
+      const isSht = !!d.sht_status || d.pressure_ok === false;
+      const airOk = isOk(d.air_temp_ok, d.air_temp) && isOk(d.humidity_ok, d.humidity) && (isSht ? true : isOk(d.pressure_ok, d.pressure));
+      const airSensorName = isSht ? 'SHT30 (воздух/влажность)' : 'BME280 (воздух/влажность/давление)';
+      const airStatus = d.sht_status || d.bme_status || 'нет данных';
+
+      if (!airOk) {
+        problems.push(airSensorName + ': ' + esc(airStatus) +
+          sensorHint(airStatus) +
           ' • шина I²C: ' + esc(d.i2c_devices || '?') +
           (d.i2c_sda !== undefined ? ' (SDA=' + esc(d.i2c_sda) + ', SCL=' + esc(d.i2c_scl) + ')' : ''));
-      } else if (d.bme_status && d.bme_status !== 'OK') {
-        warnings.push('BME280: ' + esc(d.bme_status) + sensorHint(d.bme_status));
+      } else if (airStatus !== 'OK' && airStatus !== 'INIT') {
+        warnings.push(airSensorName + ': ' + esc(airStatus) + sensorHint(airStatus));
       }
 
       if (!isOk(d.substrate_temp_ok, d.substrate_temp)) {
@@ -568,7 +659,7 @@
           const state = JSON.parse(text);
           updateClimateUI(state);
         }
-        else if (topic === 'growbox/image/raw') {
+        else if (topic === 'growbox/image/raw' || topic === 'growbox/camera/updated') {
           loadLatestImage();
         }
       } catch (err) {
@@ -601,6 +692,7 @@
         client.subscribe('growbox/status');
         client.subscribe('growbox/controller/state');
         client.subscribe('growbox/image/raw');
+        client.subscribe('growbox/camera/updated');
       });
 
       client.on('offline', () => {
@@ -728,6 +820,7 @@
           sessionStorage.setItem('growbox_session_token', sessionToken);
           unlockExpiresAt = Date.now() + 15 * 60 * 1000;
           checkLockStatus();
+          const actionAfterLogin = pendingAction;
           closePinModal();
 
           if (data.mqtt) {
@@ -735,12 +828,9 @@
           }
           loadLatestImage();
           fetchInitialClimate();
+          loadCameraSettings();
 
-          if (typeof pendingAction === 'function') {
-            const act = pendingAction;
-            pendingAction = null;
-            act();
-          }
+          if (typeof actionAfterLogin === 'function') actionAfterLogin();
         } else {
           err.innerText = data.error || 'Неверный PIN-код';
           err.classList.remove('hidden');
@@ -1061,7 +1151,7 @@
         const btn = document.getElementById('btnSnap');
         const text = document.getElementById('btnSnapText');
         btn.disabled = true;
-        text.innerText = 'Захват кадра...';
+        text.innerText = 'Запрос съёмки...';
 
         fetch(apiBase + '/api/capture', {
           method: 'POST',
@@ -1069,18 +1159,123 @@
             'Authorization': 'Bearer ' + sessionToken
           }
         })
-        .then(r => r.json())
+        .then(async r => {
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || 'HTTP ' + r.status);
+          let remaining = 6;
+          text.innerText = `Съёмка и прогрев... (${remaining}с)`;
+          const timer = setInterval(() => {
+            remaining--;
+            if (remaining > 0) {
+              text.innerText = `Съёмка и прогрев... (${remaining}с)`;
+            } else {
+              clearInterval(timer);
+              btn.disabled = false;
+              text.innerText = 'Сделать снимок сейчас';
+            }
+          }, 1000);
+          setTimeout(loadLatestImage, 4000);
+          setTimeout(loadLatestImage, 7000);
+          setTimeout(loadLatestImage, 10000);
+        })
         .catch((err) => {
-          console.warn('REST capture error:', err);
-        });
-
-        setTimeout(() => {
-          loadLatestImage();
           btn.disabled = false;
-          text.innerText = 'Сделать снимок сейчас';
-        }, 3500);
+          text.innerText = 'Ошибка: ' + err.message;
+          document.getElementById('cameraSettingsStatus').textContent = 'Снимок не запрошен: ' + err.message;
+          setTimeout(() => {
+            text.innerText = 'Сделать снимок сейчас';
+          }, 4000);
+        });
       });
     }
+
+    let cameraSettingsDirty = false;
+    let cameraSettingsSaving = false;
+    let cameraSettingsRead = 0;
+    let currentCameraSettings = null;
+
+    function renderCameraSettings(data, replaceDraft = false) {
+      currentCameraSettings = data;
+      const reception = document.getElementById('cameraReception');
+      const auto = document.getElementById('cameraAuto');
+      const interval = document.getElementById('cameraInterval');
+      const button = document.getElementById('cameraSettingsSave');
+      if (!cameraSettingsDirty || replaceDraft) {
+        reception.checked = data.settings.reception_enabled;
+        auto.checked = data.settings.auto_enabled;
+        interval.value = data.settings.interval_seconds / 60;
+        cameraSettingsDirty = false;
+      }
+      reception.disabled = !isUnlocked || cameraSettingsSaving;
+      auto.disabled = !isUnlocked || cameraSettingsSaving || !reception.checked;
+      interval.disabled = !isUnlocked || cameraSettingsSaving || !reception.checked;
+      button.disabled = cameraSettingsSaving;
+      button.textContent = cameraSettingsSaving ? 'Сохранение…' : (isUnlocked ? 'Сохранить настройки' : 'Войти по PIN для изменения');
+      const device = data.device;
+      let state = data.settings.reception_enabled ? 'Приём фото разрешён. ' : 'Приём фото выключен. ';
+      if (data.load_error) state += 'Файл настроек повреждён: приём и автосъёмка заблокированы. ';
+      if (!data.mqtt_connected) state += 'Нет связи с MQTT; настройка ожидает доставки на ESP.';
+      else if (!device || !device.fresh) state += 'Ожидается подтверждение ESP. Сохранение на сервере ещё не означает применение на плате.';
+      else if (!device.supported) state += 'Эта прошивка ESP не поддерживает настройку расписания. Нужно одно обновление прошивки.';
+      else if (!device.confirmed) state += 'ESP ещё не подтвердил сохранение выбранных настроек.';
+      else state += device.camera_ready ? 'ESP подтвердил настройку и сохранил её.' : 'Настройка сохранена на ESP, но камера недоступна.';
+      document.getElementById('cameraSettingsStatus').textContent = state;
+    }
+
+    async function loadCameraSettings() {
+      if (cameraSettingsSaving) return;
+      const read = ++cameraSettingsRead;
+      const headers = sessionToken ? {'Authorization':'Bearer '+sessionToken} : {};
+      try {
+        const res = await fetch(apiBase+'/api/camera/settings', {headers});
+        if (read !== cameraSettingsRead) return;
+        if (res.status === 401) {
+          for (const id of ['cameraReception','cameraAuto','cameraInterval']) document.getElementById(id).disabled = true;
+          document.getElementById('cameraSettingsStatus').textContent = 'Войдите по PIN, чтобы посмотреть настройки камеры.';
+          return;
+        }
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        const data = await res.json();
+        if (read === cameraSettingsRead) renderCameraSettings(data);
+      } catch (_) {
+        if (read === cameraSettingsRead) document.getElementById('cameraSettingsStatus').textContent = 'Не удалось получить настройки камеры. Проверьте связь с сервером.';
+      }
+    }
+
+    async function saveCameraSettings() {
+      if (!isUnlocked || Date.now() >= unlockExpiresAt) return openPinModal(() => loadCameraSettings());
+      if (cameraSettingsSaving) return;
+      const minutes = Number(document.getElementById('cameraInterval').value);
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+        document.getElementById('cameraSettingsStatus').textContent = 'Укажите целый интервал от 1 до 1440 минут.';
+        return;
+      }
+      const reception = document.getElementById('cameraReception').checked;
+      const value = {reception_enabled: reception, auto_enabled: reception && document.getElementById('cameraAuto').checked, interval_seconds:minutes*60};
+      cameraSettingsSaving = true;
+      ++cameraSettingsRead;
+      if (currentCameraSettings) renderCameraSettings(currentCameraSettings);
+      try {
+        const res = await fetch(apiBase+'/api/camera/settings', {method:'PUT',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer '+sessionToken}, body:JSON.stringify(value)});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP '+res.status);
+        cameraSettingsSaving = false;
+        renderCameraSettings(data, true);
+      } catch (err) {
+        cameraSettingsSaving = false;
+        if (currentCameraSettings) renderCameraSettings(currentCameraSettings);
+        document.getElementById('cameraSettingsStatus').textContent = 'Не сохранено: '+err.message;
+      }
+    }
+
+    document.getElementById('cameraSettingsForm').addEventListener('input', () => {
+      cameraSettingsDirty = true;
+      const reception = document.getElementById('cameraReception').checked;
+      if (!reception) document.getElementById('cameraAuto').checked = false;
+      document.getElementById('cameraAuto').disabled = !isUnlocked || !reception;
+      document.getElementById('cameraInterval').disabled = !isUnlocked || !reception;
+    });
 
     function loadLatestImage() {
       const img = document.getElementById('camImage');
@@ -1149,6 +1344,63 @@
         .catch(err => console.warn('Failed to fetch initial climate:', err));
     }
 
+    let otaState = null, otaManifest = null, otaSubmitting = false;
+    function renderOta() {
+      const d = otaState && otaState.device;
+      const canUpdate = isUnlocked && otaState && otaState.configured && otaState.mqtt_connected && d && d.fresh && d.enabled && d.rollback &&
+        ['idle','failed','rejected','not_idle'].includes(d.state) && d.relays.every(x => !x) && !otaSubmitting &&
+        (!otaState.pending || Date.now() - otaState.pending.sent_at >= 240000);
+      document.getElementById('otaManifest').disabled = !isUnlocked || otaSubmitting;
+      document.getElementById('otaStart').disabled = !canUpdate || !otaManifest;
+      let text = 'Войдите по PIN для проверки OTA.';
+      if (isUnlocked && otaState) {
+        if (!otaState.configured) text = 'OTA выключено: на сервере не настроен ключ проверки подписи.';
+        else if (!d) text = 'ESP ещё не сообщила поддержку OTA. Старую прошивку нужно обновить по USB.';
+        else if (!otaState.mqtt_connected || !d.fresh) text = 'Нет свежей связи с ESP. Обновление заблокировано.';
+        else if (!d.enabled || !d.rollback) text = 'OTA на ESP недоступно: проверьте ключ, разделы памяти и загрузчик с откатом.';
+        else text = 'Сборка ' + d.build + ' · ' + d.state + ' · ' + (Number(d.progress) || 0) + '%';
+        if (otaState.pending) text += ' Запрошена сборка ' + otaState.pending.build + '; установка ещё не подтверждена.';
+      }
+      document.getElementById('otaStatus').textContent = text;
+    }
+    async function loadOtaStatus() {
+      if (!isUnlocked || !sessionToken) { renderOta(); return; }
+      try {
+        const res = await fetch(apiBase + '/api/ota/status', {headers:{Authorization:'Bearer '+sessionToken}});
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        otaState = await res.json(); renderOta();
+      } catch (_) {
+        otaState = null; renderOta();
+        document.getElementById('otaStatus').textContent = 'Статус OTA недоступен. Обновление заблокировано.';
+      }
+    }
+    document.getElementById('otaManifest').addEventListener('change', async event => {
+      otaManifest = null;
+      try {
+        const file = event.target.files[0];
+        if (!file) { document.getElementById('otaSelection').textContent = 'Файл не выбран.'; renderOta(); return; }
+        if (file.size > 4096) throw new Error('Файл слишком большой: нужен подписанный JSON, не прошивка .bin');
+        const m = JSON.parse(await file.text());
+        if (m.protocol !== 1 || typeof m.signature !== 'string' || !Number.isInteger(m.build) || !Number.isInteger(m.size) || typeof m.device_id !== 'string') throw new Error('Неверный формат файла обновления');
+        otaManifest = m;
+        document.getElementById('otaSelection').textContent = m.device_id + ' · сборка ' + m.build + ' · ' + m.size + ' байт. Подпись проверяется сервером и ESP при запуске.';
+      } catch (err) { document.getElementById('otaSelection').textContent = err.message; }
+      renderOta();
+    });
+    async function startOta() {
+      if (!isUnlocked || !otaManifest || otaSubmitting || document.getElementById('otaStart').disabled) return;
+      if (!window.confirm('Обновить ESP до сборки '+otaManifest.build+'? Все реле должны быть выключены, режим — ручной. Устройство перезагрузится.')) return;
+      otaSubmitting = true; renderOta();
+      try {
+        const res = await fetch(apiBase+'/api/ota/start',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessionToken},body:JSON.stringify(otaManifest)});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP '+res.status);
+        otaState = data; otaManifest = null; document.getElementById('otaManifest').value = '';
+        document.getElementById('otaSelection').textContent = 'Команда отправлена. Дождитесь новой сборки и успешной проверки после перезагрузки.';
+      } catch (err) { document.getElementById('otaSelection').textContent = 'Не запущено: '+err.message; }
+      finally { otaSubmitting = false; renderOta(); }
+    }
+
     function checkInitialSession() {
       const savedToken = sessionStorage.getItem('growbox_session_token');
       const headers = savedToken ? { 'Authorization': 'Bearer ' + savedToken } : {};
@@ -1165,6 +1417,7 @@
             if (data.mqtt) initMqtt(data.mqtt);
             loadLatestImage();
             fetchInitialClimate();
+            loadCameraSettings();
           } else if (data && data.public_telemetry) {
             publicTelemetryActive = true;
             checkLockStatus();
@@ -1191,6 +1444,68 @@
     checkInitialSession();
     loadAllProfiles();
     setInterval(loadLatestImage, 60000);
+    setInterval(loadCameraSettings, 10000);
+    setInterval(loadOtaStatus, 5000);
+    function openOtaModal() {
+      if (!isUnlocked || Date.now() >= unlockExpiresAt) return openPinModal(() => openOtaModal());
+      document.getElementById('otaModal').classList.remove('hidden');
+      loadOtaStatus();
+    }
+    function closeOtaModal() {
+      document.getElementById('otaModal').classList.add('hidden');
+    }
+
+    async function uploadFirmwareBin(event) {
+      const file = event.target.files[0];
+      const statusEl = document.getElementById('otaBinUploadStatus');
+      if (!file) return;
+
+      // Immediately reset any previous manifest and disable update button
+      otaManifest = null;
+      renderOta();
+      const selectionEl = document.getElementById('otaSelection');
+      if (selectionEl) selectionEl.textContent = 'Файл не выбран.';
+      const manifestInput = document.getElementById('otaManifest');
+      if (manifestInput) manifestInput.value = '';
+
+      if (!file.name.endsWith('.bin')) {
+        statusEl.textContent = 'Ошибка: выберите скомпилированный файл .bin!';
+        statusEl.className = 'text-[11px] text-rose-400 mt-1';
+        return;
+      }
+      statusEl.textContent = 'Загрузка прошивки на сервер (' + Math.round(file.size/1024) + ' KB)...';
+      statusEl.className = 'text-[11px] text-amber-400 mt-1';
+      try {
+        const buffer = await file.arrayBuffer();
+        const res = await fetch(apiBase + '/api/ota/upload-firmware', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Authorization': 'Bearer ' + sessionToken
+          },
+          body: buffer
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        if (data.auto_signed && data.manifest) {
+          otaManifest = data.manifest;
+          statusEl.textContent = '✓ Прошивка загружена и автоматически подписана ключом сервера (сборка ' + data.manifest.build + ', ' + data.manifest.size + ' байт). Нажмите «Обновить ESP32-S3».';
+          statusEl.className = 'text-[11px] text-emerald-400 mt-1';
+          renderOta();
+        } else if (data.sign_error) {
+          statusEl.textContent = 'Файл .bin сохранён. Автоподпись не выполнена (' + data.sign_error + '). Выберите готовый подписанный JSON.';
+          statusEl.className = 'text-[11px] text-amber-400 mt-1 break-all';
+        } else {
+          statusEl.textContent = 'Файл .bin сохранён на сервере (' + data.filename + '). Теперь выберите подписанный JSON.';
+          statusEl.className = 'text-[11px] text-emerald-400 mt-1 break-all';
+        }
+      } catch (err) {
+        statusEl.textContent = 'Ошибка загрузки: ' + err.message;
+        statusEl.className = 'text-[11px] text-rose-400 mt-1';
+      }
+    }
+
+    loadCameraSettings();
     setInterval(fetchInitialClimate, 30000);
     setInterval(loadAllProfiles, 60000);
   </script>

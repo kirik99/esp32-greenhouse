@@ -2,8 +2,10 @@
 *.env
 bridge/.env
 bridge/images/
+bridge/state/
 bridge/node_modules/
 bridge/climate_state.json
+bridge/camera_settings.json
 dashboard/node_modules/
 dashboard/dist/
 nginx/certs/
@@ -16,4 +18,3 @@ mosquitto_data/
 mosquitto_log/
 mosquitto/passwords.txt
 !mosquitto/passwords.txt.example
-
